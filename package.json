@@ -1,0 +1,40 @@
+{
+  "name": "whatsapp-intel",
+  "version": "1.0.0",
+  "description": "Dashboard WhatsApp Intel",
+  "main": "electron-main.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "desktop": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.ronan.whatsappintel",
+    "productName": "WhatsApp Intel",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron-main.js",
+      "public/**/*",
+      "server/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "portable"
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^36.9.5",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "express": "^5.2.1",
+    "pino": "^10.3.1",
+    "qrcode": "^1.5.4"
+  }
+}
