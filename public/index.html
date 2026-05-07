@@ -770,12 +770,32 @@
   function scrollToCard(idx) { document.getElementById(`card-${idx}`)?.scrollIntoView({behavior:'smooth',block:'center'}); }
 
   function clearAll() {
-    if (!profiles.length) return;
     if (confirm('Limpar todos os dados?')) {
+      // Limpa perfis e UI principal
       profiles = [];
       document.getElementById('numbersArea').value = '';
       document.getElementById('numList').innerHTML = '';
       document.getElementById('progWrap').classList.remove('on');
+      document.getElementById('progFill').style.width = '0%';
+      document.getElementById('progTxt').textContent = '0 / 0';
+
+      // Limpa sistema de importacao de arquivos
+      importedFiles = [];
+      allGroups = {};
+      if (typeof allExtracted !== 'undefined') {
+        Object.keys(allExtracted).forEach(k => delete allExtracted[k]);
+      }
+      document.getElementById('importCount').innerHTML = '';
+      document.getElementById('importFile').value = '';
+
+      // Limpa tags de arquivos importados
+      const tagsEl = document.getElementById('importTags');
+      if (tagsEl) tagsEl.innerHTML = '';
+
+      // Limpa filtros de grupo
+      const filterWrap = document.getElementById('filterWrap');
+      if (filterWrap) { filterWrap.innerHTML = ''; filterWrap.style.display = 'none'; }
+
       renderGrid(); updateStats();
       fetch('/api/cache/clear', { method: 'POST' });
     }
