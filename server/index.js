@@ -67,9 +67,13 @@ async function consultarOperadora(number) {
   try {
     const token = await getCelcoinToken();
     if (!token) return null;
-    // number já vem sem +55, ex: 27999721829
-    const ddd = number.slice(0, 2);
-    const num = number.slice(2);
+    // Remove codigo do pais +55 se existir
+    let normalized = number;
+    if (normalized.startsWith('55') && normalized.length > 11) {
+      normalized = normalized.slice(2);
+    }
+    const ddd = normalized.slice(0, 2);
+    const num = normalized.slice(2);
     const res = await fetch(
       `https://sandbox.openfinance.celcoin.dev/v5/transactions/topups/find-providers?stateCode=${ddd}&PhoneNumber=${num}`,
       { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
