@@ -41,6 +41,49 @@ let profileCache = {};
 let chatsCache = [];
 let messagesCache = {};
 
+// Cache do token CelCoin
+let celcoinToken = null;
+let celcoinTokenExpiry = 0;
+
+async function getCelcoinToken() {
+  if (celcoinToken && Date.now() < celcoinTokenExpiry) return celcoinToken;
+  try {
+    const res = await fetch('https://sandbox.openfinance.celcoin.dev/v5/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'client_id=41b44ab9a56440.teste.celcoinapi.v5&client_secret=e9d15cde33024c1494de7480e69b7a18c09d7cd25a8446839b3be82a56a044a3&grant_type=client_credentials'
+    });
+    const data = await res.json();
+    celcoinToken = data.access_token;
+    celcoinTokenExpiry = Date.now() + (2300 * 1000); // 2300s de margem
+    return celcoinToken;
+  } catch(e) {
+    console.error('[INTEL] Erro ao obter token CelCoin:', e.message);
+    return null;
+  }
+}
+
+async function consultarOperadora(number) {
+  try {
+    const token = await getCelcoinToken();
+    if (!token) return null;
+    const ddd = number.slice(0, 2);
+    const num = number.slice(2);
+    const res = await fetch(
+      `https://sandbox.openfinance.celcoin.dev/v5/transactions/topups/find-providers?stateCode=${ddd}&PhoneNumber=${num}`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
+    );
+    const data = await res.json();
+    if (data && data.providers && data.providers.length > 0) {
+      return data.providers[0].name || null;
+    }
+    return null;
+  } catch(e) {
+    console.error('[INTEL] Erro ao consultar operadora:', e.message);
+    return null;
+  }
+}
+
 async function connectWhatsApp() {
   try {
     await loadBaileys();
@@ -283,8 +326,14 @@ app.post('/api/photos/batch', async (req, res) => {
         } catch (e) {}
       }
 
-      result = { number: raw, photoUrl, about, found, noWhatsApp, isBusiness, businessName, businessCategory, businessDescription, index: i };
-      profileCache[number] = { number: raw, photoUrl, about, found, noWhatsApp, isBusiness, businessName, businessCategory, businessDescription };
+      // Consulta operadora via CelCoin
+      let operadora = null;
+      try {
+        operadora = await consultarOperadora(number);
+      } catch(e) {}
+
+      result = { number: raw, photoUrl, about, found, noWhatsApp, isBusiness, businessName, businessCategory, businessDescription, operadora, index: i };
+      profileCache[number] = { number: raw, photoUrl, about, found, noWhatsApp, isBusiness, businessName, businessCategory, businessDescription, operadora };
     }
 
     res.write(`data: ${JSON.stringify({ ...result, progress: i + 1, total: numbers.length })}\n\n`);
