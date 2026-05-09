@@ -67,6 +67,7 @@ async function consultarOperadora(number) {
   try {
     const token = await getCelcoinToken();
     if (!token) return null;
+    // number já vem sem +55, ex: 27999721829
     const ddd = number.slice(0, 2);
     const num = number.slice(2);
     const res = await fetch(
@@ -74,8 +75,9 @@ async function consultarOperadora(number) {
       { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
     );
     const data = await res.json();
-    if (data && data.providers && data.providers.length > 0) {
-      return data.providers[0].name || null;
+    console.log('[INTEL] Operadora:', number, '->', data.nameProvider || 'N/A');
+    if (data && data.nameProvider && data.errorCode === '000') {
+      return data.nameProvider;
     }
     return null;
   } catch(e) {
