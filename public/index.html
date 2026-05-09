@@ -136,6 +136,7 @@
   .mb-btn{width:100%;font-family:'Orbitron',monospace;font-size:8px;letter-spacing:2px;padding:8px;border:1px solid rgba(255,61,113,0.25);background:transparent;color:rgba(255,61,113,0.4);cursor:pointer;transition:all 0.2s;margin-top:4px;}
   .mb-btn:hover{border-color:var(--red);color:var(--red);background:rgba(255,61,113,0.05);}
 
+  .card-operadora{font-size:10px;color:#00e5ff;letter-spacing:1px;margin-top:3px;text-transform:uppercase;}
   .card-about{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-style:italic;letter-spacing:0.5px;}
   .card-about.has-text{color:rgba(0,229,255,0.55);}
   .modal-about{font-family:'Share Tech Mono',monospace;font-size:11px;color:rgba(0,229,255,0.6);padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-left:2px solid var(--accent);margin-bottom:10px;font-style:italic;line-height:1.6;letter-spacing:0.5px;}
@@ -231,8 +232,8 @@
     <div class="toolbar">
       <input type="text" class="search" id="searchBox" placeholder="BUSCAR NÚMERO...">
       <button class="tb active" onclick="setFilter('all',this)">TODOS</button>
-      <button class="tb" onclick="setFilter('identificavel',this)">IDENTIFICÁVEIS</button>
-      <button class="tb" onclick="setFilter('publica',this)">PÚBLICAS</button>
+      <button class="tb" onclick="setFilter('comfoto',this)">COM FOTO</button>
+      
       
       <button class="tb" onclick="setFilter('nophoto',this)">SEM FOTO</button>
       <button class="tb" onclick="setFilter('nowhats',this)">INATIVAS</button>
@@ -286,8 +287,8 @@
       <div id="mAbout" class="modal-about empty">—</div>
       <select id="mStatus" onchange="applyStatus()">
         
-        <option value="publica">PÚBLICA — Foto visível, sem rosto claro</option>
-        <option value="identificavel">IDENTIFICÁVEL — Rosto ou dado pessoal visível</option>
+        
+        
       </select>
       <button class="mb-btn" onclick="toggleFlag()">⚑ MARCAR / DESMARCAR COMO RELEVANTE</button>
     </div>
@@ -618,7 +619,7 @@
 
     profiles = numbers.map((n, i) => ({
       number: n, photoUrl: null, about: null, found: null, isBusiness: false, businessName: null, businessCategory: null,
-      status: 'anonima', flagged: false, index: i + 1, loading: true
+      status: 'ativa', flagged: false, index: i + 1, loading: true
     }));
 
     isBusy = true;
@@ -657,6 +658,7 @@
           p.businessName = data.businessName || null;
           p.businessCategory = data.businessCategory || null;
           p.noWhatsApp = data.noWhatsApp || false;
+          p.operadora = data.operadora || null;
           p.loading = false;
         }
         const pct = Math.round((data.progress / data.total) * 100);
@@ -684,6 +686,7 @@
       if (!p.number.toLowerCase().includes(search)) return false;
       if (currentFilter === 'nophoto') return !p.photoUrl && !p.loading && !p.noWhatsApp;
       if (currentFilter === 'nowhats') return p.noWhatsApp === true;
+      if (currentFilter === 'comfoto') return !!p.photoUrl && !p.loading;
       if (currentFilter !== 'all') return p.status === currentFilter;
       return true;
     });
@@ -694,8 +697,8 @@
     grid.innerHTML = filtered.map((p, i) => {
       const gi = profiles.indexOf(p);
       const delay = (i * 0.03).toFixed(2);
-      const bClass = p.status==='identificavel'?'b-id':p.status==='publica'?'b-pub':p.noWhatsApp?'b-inativa':'b-ativa';
-      const bLabel = p.status==='identificavel'?'IDENTIF.':p.status==='publica'?'PÚBLICA':p.noWhatsApp?'CONTA INATIVA':'CONTA ATIVA';
+      const bClass = p.noWhatsApp?'b-inativa':'b-ativa';
+      const bLabel = p.noWhatsApp?'CONTA INATIVA':'CONTA ATIVA';
       let ph = '';
       if (p.loading) ph = `<div class="shimmer"></div>`;
       else if (p.photoUrl) ph = `<img src="${p.photoUrl}" alt="${p.number}" loading="lazy">`;
@@ -714,6 +717,7 @@
           <div class="card-num">${p.number}</div>
           <div class="card-row"><span class="badge ${bClass}">${bLabel}</span><span class="card-idx">#${String(p.index).padStart(3,'0')}</span></div>
           <div class="card-about ${p.about?'has-text':''}">${p.about||'—'}</div>
+          ${p.operadora ? `<div class="card-operadora">📡 ${p.operadora}</div>` : ''}
         </div>
       </div>`;
     }).join('');
@@ -901,7 +905,7 @@ ${imgData.map(p => {
       // PASSO 3: CSV completo
       const csv = ['Número,Foto,Status,Business,Nome Business,Recado,Marcado']
         .concat(profiles.map(p =>
-          `"${p.number}","${p.photoUrl?'SIM':'NÃO'}","${p.status}","${p.isBusiness?'SIM':'NÃO'}","${p.businessName||''}","${(p.about||'').replace(/"/g,"'")}","${p.flagged?'SIM':'NÃO'}"`
+          `"${p.number}","${p.photoUrl?'SIM':'NÃO'}","${p.status}","${p.isBusiness?'SIM':'NÃO'}","${p.businessName||''}","${(p.about||'').replace(/"/g,"'")}","${p.operadora||''}","${p.flagged?'SIM':'NÃO'}"`
         )).join('\n');
       zip.file('dados.csv', csv);
 
