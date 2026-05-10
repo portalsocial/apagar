@@ -296,8 +296,8 @@
 </div>
 
 <script>
-  // URL base da API — altere para a URL do Render quando usar GitHub Pages
-  const API_BASE = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost'
+  // URL base da API
+  const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
     ? ''
     : 'https://bucawhatsapp.onrender.com';
 
