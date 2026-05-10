@@ -808,7 +808,7 @@
 
   async function exportImages() {
     const withPhoto = profiles.filter(p => p.photoUrl);
-    if (!withPhoto.length) { alert('Nenhuma foto encontrada para exportar.'); return; }
+    if (!profiles.length) { alert('Nenhum perfil carregado para exportar.'); return; }
 
     const btn = document.getElementById('btnExportImg');
     btn.disabled = true;
@@ -816,33 +816,35 @@
     try {
       const zip = new JSZip();
       const folder = zip.folder('fotos_perfil');
-      const imgData = []; // {number, base64, ext, isBusiness, status, about, businessName}
+      // imgData contém TODOS os perfis (com e sem foto)
+      const imgData = [];
 
-      // PASSO 1: Baixa todas as fotos via proxy e converte para base64
-      for (let i = 0; i < withPhoto.length; i++) {
-        const p = withPhoto[i];
-        btn.textContent = `BAIXANDO ${i+1}/${withPhoto.length}...`;
+      // PASSO 1: Baixa fotos dos perfis que têm photoUrl
+      let dlCount = 0;
+      for (let i = 0; i < profiles.length; i++) {
+        const p = profiles[i];
         const filename_base = p.number.replace(/[^0-9+]/g, '');
         let b64 = null;
         let ext = 'jpg';
 
-        try {
-          // Sempre usa o proxy para garantir download correto
-          const resp = await fetch('/api/proxy-image?url=' + encodeURIComponent(p.photoUrl));
-          if (resp.ok) {
-            const blob = await resp.blob();
-            ext = blob.type.includes('png') ? 'png' : 'jpg';
-            // Converte blob para base64
-            b64 = await new Promise(resolve => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(reader.result.split(',')[1]);
-              reader.readAsDataURL(blob);
-            });
-            // Salva no ZIP
-            folder.file(filename_base + '.' + ext, b64, { base64: true });
+        if (p.photoUrl) {
+          dlCount++;
+          btn.textContent = `BAIXANDO ${dlCount}/${withPhoto.length}...`;
+          try {
+            const resp = await fetch('/api/proxy-image?url=' + encodeURIComponent(p.photoUrl));
+            if (resp.ok) {
+              const blob = await resp.blob();
+              ext = blob.type.includes('png') ? 'png' : 'jpg';
+              b64 = await new Promise(resolve => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result.split(',')[1]);
+                reader.readAsDataURL(blob);
+              });
+              folder.file(filename_base + '.' + ext, b64, { base64: true });
+            }
+          } catch(e) {
+            console.warn('Erro ao baixar foto:', p.number, e);
           }
-        } catch(e) {
-          console.warn('Erro ao baixar foto:', p.number, e);
         }
 
         imgData.push({ ...p, b64, ext, filename: filename_base });
@@ -850,6 +852,22 @@
 
       // PASSO 2: Gera galeria HTML com imagens EMBUTIDAS em base64 (sem dependência externa)
       btn.textContent = 'GERANDO GALERIA...';
+
+      // Serializa todos os dados dos cards em JSON para uso no JS da galeria
+      const cardsJson = JSON.stringify(imgData.map(p => ({
+        number: p.number,
+        index: p.index,
+        b64: p.b64 || null,
+        ext: p.ext || 'jpg',
+        noWhatsApp: p.noWhatsApp || false,
+        isBusiness: p.isBusiness || false,
+        businessName: p.businessName || null,
+        businessCategory: p.businessCategory || null,
+        about: p.about || null,
+        operadora: p.operadora || null,
+        flagged: p.flagged || false
+      })));
+
       const galleryHtml = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -860,15 +878,23 @@
   :root{--bg:#050a0e;--bg2:#0a1520;--bg3:#0d1e2e;--accent:#00e5ff;--green:#39ff14;--red:#ff3d71;--text:#c8d8e8;--dim:#4a6070;--border:rgba(0,229,255,0.15);--glow:0 0 20px rgba(0,229,255,0.3);}
   *{margin:0;padding:0;box-sizing:border-box;}
   body{background:var(--bg);color:var(--text);font-family:'Rajdhani',sans-serif;padding:28px;}
-  body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.05) 2px,rgba(0,0,0,0.05) 4px);pointer-events:none;}
-  header{margin-bottom:24px;border-bottom:1px solid var(--border);padding-bottom:16px;}
+  body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.05) 2px,rgba(0,0,0,0.05) 4px);pointer-events:none;z-index:0;}
+  header{margin-bottom:20px;border-bottom:1px solid var(--border);padding-bottom:16px;position:relative;z-index:1;}
   h1{font-family:'Orbitron',monospace;font-size:16px;letter-spacing:4px;color:var(--accent);text-shadow:var(--glow);margin-bottom:6px;}
   .meta{font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:1px;line-height:2;}
   .meta b{color:var(--accent);}
-  .stats{display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;}
+  .stats{display:flex;gap:12px;margin-top:10px;flex-wrap:wrap;}
   .stat{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--dim);padding:5px 10px;border:1px solid var(--border);background:rgba(0,229,255,0.02);letter-spacing:1px;}
   .stat b{color:var(--accent);font-size:13px;}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:12px;}
+  .toolbar{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;align-items:center;position:relative;z-index:1;}
+  .search{font-family:'Share Tech Mono',monospace;font-size:11px;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);color:var(--text);outline:none;flex:1;min-width:160px;transition:border-color 0.2s;}
+  .search:focus{border-color:var(--accent);}
+  .search::placeholder{color:var(--dim);}
+  .tb{font-family:'Orbitron',monospace;font-size:8px;letter-spacing:1px;padding:8px 13px;border:1px solid var(--border);background:transparent;color:var(--dim);cursor:pointer;transition:all 0.2s;}
+  .tb:hover,.tb.active{border-color:var(--accent);color:var(--accent);background:rgba(0,229,255,0.04);}
+  .count-label{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--dim);letter-spacing:1px;margin-left:4px;}
+  .count-label b{color:var(--accent);}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:12px;position:relative;z-index:1;}
   .card{background:var(--bg2);border:1px solid var(--border);overflow:hidden;transition:all 0.25s;position:relative;}
   .card:hover{border-color:var(--accent);box-shadow:var(--glow);transform:translateY(-2px);}
   .card.flagged{border-color:var(--red);box-shadow:0 0 14px rgba(255,61,113,0.2);}
@@ -892,6 +918,7 @@
   .card-about.has-text{color:rgba(0,229,255,0.55);}
   .card-operadora{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--accent);letter-spacing:1px;margin-top:3px;}
   .card-idx{font-family:'Share Tech Mono',monospace;font-size:7px;color:var(--dim);}
+  .empty{grid-column:1/-1;text-align:center;padding:60px 20px;font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:2px;}
   ::-webkit-scrollbar{width:3px;}
   ::-webkit-scrollbar-track{background:var(--bg);}
   ::-webkit-scrollbar-thumb{background:rgba(0,229,255,0.15);}
@@ -910,28 +937,72 @@
     <div class="stat">MARCADOS <b>${profiles.filter(p=>p.flagged).length}</b></div>
   </div>
 </header>
-<div class="grid">
-${imgData.map(p => {
-  const bClass  = p.noWhatsApp ? 'b-inativa' : 'b-ativa';
-  const bLabel  = p.noWhatsApp ? 'CONTA INATIVA' : 'CONTA ATIVA';
-  const imgTag  = p.b64
-    ? `<img src="data:image/${p.ext};base64,${p.b64}" alt="${p.number}">`
-    : `<div class="nophoto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>${p.noWhatsApp?'INATIVA':'SEM FOTO'}</div>`;
-  return `<div class="card${p.flagged?' flagged':''}">
-  <div class="card-corner"></div>
-  <div class="card-photo">${imgTag}</div>
-  <div class="card-foot">
-    ${p.isBusiness ? `<div class="biz-badge">⊕ BUSINESS</div>` : ''}
-    ${p.isBusiness && p.businessName ? `<div class="biz-name">${p.businessName}</div>` : ''}
-    ${p.isBusiness && p.businessCategory ? `<div class="biz-cat">${p.businessCategory}</div>` : ''}
-    <div class="card-num">${p.number}</div>
-    <div class="card-row"><span class="badge ${bClass}">${bLabel}</span><span class="card-idx">#${String(p.index).padStart(3,'0')}</span></div>
-    <div class="card-about${p.about?' has-text':''}">${p.about||'—'}</div>
-    ${p.operadora ? `<div class="card-operadora">📡 ${p.operadora}</div>` : ''}
-  </div>
-</div>`;
-}).join('\n')}
+
+<div class="toolbar">
+  <input type="text" class="search" id="searchBox" placeholder="BUSCAR NÚMERO..." oninput="renderCards()">
+  <button class="tb active" onclick="setFilter('all',this)">TODOS</button>
+  <button class="tb" onclick="setFilter('comfoto',this)">COM FOTO</button>
+  <button class="tb" onclick="setFilter('semfoto',this)">SEM FOTO</button>
+  <button class="tb" onclick="setFilter('inativas',this)">INATIVAS</button>
+  <span class="count-label">EXIBINDO <b id="countLabel">0</b></span>
 </div>
+
+<div class="grid" id="grid"></div>
+
+<scr\`+\`ipt>
+const DATA = ${cardsJson};
+let currentFilter = 'all';
+
+function setFilter(f, btn) {
+  currentFilter = f;
+  document.querySelectorAll('.tb').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderCards();
+}
+
+function renderCards() {
+  const search = document.getElementById('searchBox').value.toLowerCase();
+  const grid = document.getElementById('grid');
+
+  const filtered = DATA.filter(p => {
+    if (!p.number.toLowerCase().includes(search)) return false;
+    if (currentFilter === 'comfoto')  return !!p.b64;
+    if (currentFilter === 'semfoto')  return !p.b64 && !p.noWhatsApp;
+    if (currentFilter === 'inativas') return !!p.noWhatsApp;
+    return true;
+  });
+
+  document.getElementById('countLabel').textContent = filtered.length;
+
+  if (!filtered.length) {
+    grid.innerHTML = '<div class="empty">NENHUM RESULTADO PARA O FILTRO SELECIONADO</div>';
+    return;
+  }
+
+  grid.innerHTML = filtered.map(p => {
+    const bClass = p.noWhatsApp ? 'b-inativa' : 'b-ativa';
+    const bLabel = p.noWhatsApp ? 'CONTA INATIVA' : 'CONTA ATIVA';
+    const noPhotoSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
+    const imgTag = p.b64
+      ? '<img src="data:image/' + p.ext + ';base64,' + p.b64 + '" alt="' + p.number.replace(/"/g,'') + '" loading="lazy">'
+      : '<div class="nophoto">' + noPhotoSvg + (p.noWhatsApp ? 'INATIVA' : 'SEM FOTO') + '</div>';
+    return '<div class="card' + (p.flagged ? ' flagged' : '') + '">'
+      + '<div class="card-corner"></div>'
+      + '<div class="card-photo">' + imgTag + '</div>'
+      + '<div class="card-foot">'
+      + (p.isBusiness ? '<div class="biz-badge">⊕ BUSINESS</div>' : '')
+      + (p.isBusiness && p.businessName ? '<div class="biz-name">' + p.businessName + '</div>' : '')
+      + (p.isBusiness && p.businessCategory ? '<div class="biz-cat">' + p.businessCategory + '</div>' : '')
+      + '<div class="card-num">' + p.number + '</div>'
+      + '<div class="card-row"><span class="badge ' + bClass + '">' + bLabel + '</span><span class="card-idx">#' + String(p.index).padStart(3,'0') + '</span></div>'
+      + '<div class="card-about' + (p.about ? ' has-text' : '') + '">' + (p.about || '—') + '</div>'
+      + (p.operadora ? '<div class="card-operadora">📡 ' + p.operadora + '</div>' : '')
+      + '</div></div>';
+  }).join('');
+}
+
+renderCards();
+</scr\`+\`ipt>
 </body></html>`;
 
       zip.file('galeria.html', galleryHtml);
