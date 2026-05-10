@@ -851,87 +851,72 @@
       // PASSO 2: Gera galeria HTML com imagens EMBUTIDAS em base64
       btn.textContent = 'GERANDO GALERIA...';
 
-      // Inclui TODOS os perfis na galeria (não só os com foto)
+      // Inclui TODOS os perfis na galeria
       const allData = profiles.map(p => {
         const found = imgData.find(d => d.number === p.number);
         return found || { ...p, b64: null, ext: 'jpg', filename: p.number.replace(/[^0-9+]/g,'') };
       });
 
-      const galleryHtml = `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<title>INTEL · Galeria de Perfis</title>
-<style>
-  *{margin:0;padding:0;box-sizing:border-box;}
-  body{background:#050a0e;color:#c8d8e8;font-family:'Courier New',monospace;padding:20px;}
-  body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.05) 2px,rgba(0,0,0,0.05) 4px);pointer-events:none;z-index:0;}
-  h1{color:#00e5ff;letter-spacing:4px;font-size:16px;margin-bottom:4px;}
-  .meta{color:#4a6070;font-size:10px;margin-bottom:16px;letter-spacing:1px;}
-  .filters{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;}
-  .filter-btn{font-family:'Courier New',monospace;font-size:9px;letter-spacing:2px;padding:5px 12px;border:1px solid rgba(0,229,255,0.3);background:transparent;color:#4a6070;cursor:pointer;transition:all 0.2s;}
-  .filter-btn.active,.filter-btn:hover{border-color:#00e5ff;color:#00e5ff;}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;}
-  .card{border:1px solid rgba(0,229,255,0.15);background:#0a1520;overflow:hidden;transition:border-color 0.2s;}
-  .card:hover{border-color:#00e5ff;}
-  .card img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:#0d1e2e;}
-  .nophoto{width:100%;aspect-ratio:1;background:#0d1e2e;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#4a6070;font-size:9px;letter-spacing:2px;gap:8px;}
-  .card-body{padding:7px 9px 9px;}
-  .card-num{font-size:9px;color:#00e5ff;letter-spacing:0.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:5px;}
-  .card-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;}
-  .card-idx{font-size:8px;color:#4a6070;}
-  .badge{font-size:7px;letter-spacing:1px;padding:2px 5px;border:1px solid;display:inline-block;}
-  .b-ativa{color:#39ff14;border-color:rgba(57,255,20,0.4);}
-  .b-inativa{color:#ff4444;border-color:rgba(255,68,68,0.4);}
-  .b-biz{color:#ffbe00;border-color:rgba(255,190,0,0.35);}
-  .card-about{font-size:8px;color:rgba(0,229,255,0.45);margin-top:3px;font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .card-operadora{font-size:9px;color:#00e5ff;margin-top:3px;letter-spacing:1px;}
-  .flagged{border-color:#ff3d71!important;}
-  .hidden{display:none;}
-</style>
-</head>
-<body>
-<h1>INTEL · GALERIA DE PERFIS</h1>
-<p class="meta">Gerado em: ${new Date().toLocaleString('pt-BR')} &nbsp;·&nbsp; ${profiles.length} perfis analisados &nbsp;·&nbsp; ${withPhoto.length} com foto</p>
-<div class="filters">
-  <button class="filter-btn active" onclick="setFilter('todos',this)">TODOS</button>
-  <button class="filter-btn" onclick="setFilter('comfoto',this)">COM FOTO</button>
-  <button class="filter-btn" onclick="setFilter('semfoto',this)">SEM FOTO</button>
-  <button class="filter-btn" onclick="setFilter('inativas',this)">INATIVAS</button>
-</div>
-<div class="grid" id="grid">
-${allData.map((p,i) => {
-  const bClass = p.isBusiness ? 'b-biz' : p.noWhatsApp ? 'b-inativa' : 'b-ativa';
-  const bLabel = p.isBusiness ? '⊕ BUSINESS' : p.noWhatsApp ? 'CONTA INATIVA' : 'CONTA ATIVA';
-  const imgTag = p.b64
-    ? \`<img src="data:image/\${p.ext};base64,\${p.b64}" alt="\${p.number}">\`
-    : \`<div class="nophoto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" width="32" height="32"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>\${p.noWhatsApp?'INATIVA':'SEM FOTO'}</div>\`;
-  const cats = ['todos', p.b64?'comfoto':'semfoto', p.noWhatsApp?'inativas':''];
-  return \`<div class="card\${p.flagged?' flagged':''}" data-cat="\${cats.filter(Boolean).join(' ')}">
-  \${imgTag}
-  <div class="card-body">
-    <div class="card-num">\${p.number}</div>
-    <div class="card-row">
-      <span class="badge \${bClass}">\${bLabel}</span>
-      <span class="card-idx">#\${String(i+1).padStart(3,'0')}</span>
-    </div>
-    \${p.about ? \`<div class="card-about">\${p.about}</div>\` : ''}
-    \${p.operadora ? \`<div class="card-operadora">📡 \${p.operadora}</div>\` : ''}
-    \${p.isBusiness && p.businessName ? \`<div class="card-about" style="color:#ffbe00">⊕ \${p.businessName}</div>\` : ''}
-  </div>
-</div>\`;
-}).join('\n')}
-</div>
-<script>
-function setFilter(f, btn) {
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  document.querySelectorAll('.card').forEach(c => {
-    c.classList.toggle('hidden', f !== 'todos' && !c.dataset.cat.includes(f));
-  });
-}
-</script>
-</body></html>`;
+      const cardsHtml = allData.map((p, i) => {
+        const bClass = p.isBusiness ? 'b-biz' : p.noWhatsApp ? 'b-inativa' : 'b-ativa';
+        const bLabel = p.isBusiness ? '&#8853; BUSINESS' : p.noWhatsApp ? 'CONTA INATIVA' : 'CONTA ATIVA';
+        const imgTag = p.b64
+          ? '<img src="data:image/' + p.ext + ';base64,' + p.b64 + '" alt="' + p.number + '">'
+          : '<div class="nophoto">' + (p.noWhatsApp ? 'INATIVA' : 'SEM FOTO') + '</div>';
+        const cats = ['todos', p.b64 ? 'comfoto' : 'semfoto', p.noWhatsApp ? 'inativas' : ''].filter(Boolean).join(' ');
+        const aboutHtml = p.about ? '<div class="card-about">' + p.about + '</div>' : '';
+        const operadoraHtml = p.operadora ? '<div class="card-operadora">&#128225; ' + p.operadora + '</div>' : '';
+        const bizHtml = (p.isBusiness && p.businessName) ? '<div class="card-about biz">&#8853; ' + p.businessName + '</div>' : '';
+        const flagClass = p.flagged ? ' flagged' : '';
+        return '<div class="card' + flagClass + '" data-cat="' + cats + '">'
+          + imgTag
+          + '<div class="card-body">'
+          + '<div class="card-num">' + p.number + '</div>'
+          + '<div class="card-row"><span class="badge ' + bClass + '">' + bLabel + '</span>'
+          + '<span class="card-idx">#' + String(i + 1).padStart(3, '0') + '</span></div>'
+          + aboutHtml + operadoraHtml + bizHtml
+          + '</div></div>';
+      }).join('\n');
+
+      const galleryHtml = '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">'
+        + '<title>INTEL - Galeria de Perfis</title><style>'
+        + '*{margin:0;padding:0;box-sizing:border-box;}'
+        + 'body{background:#050a0e;color:#c8d8e8;font-family:Courier New,monospace;padding:20px;}'
+        + 'h1{color:#00e5ff;letter-spacing:4px;font-size:16px;margin-bottom:4px;}'
+        + '.meta{color:#4a6070;font-size:10px;margin-bottom:16px;letter-spacing:1px;}'
+        + '.filters{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;}'
+        + '.filter-btn{font-family:Courier New,monospace;font-size:9px;letter-spacing:2px;padding:5px 12px;border:1px solid rgba(0,229,255,0.3);background:transparent;color:#4a6070;cursor:pointer;}'
+        + '.filter-btn.active,.filter-btn:hover{border-color:#00e5ff;color:#00e5ff;}'
+        + '.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;}'
+        + '.card{border:1px solid rgba(0,229,255,0.15);background:#0a1520;overflow:hidden;}'
+        + '.card:hover{border-color:#00e5ff;}'
+        + '.card img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:#0d1e2e;}'
+        + '.nophoto{width:100%;aspect-ratio:1;background:#0d1e2e;display:flex;align-items:center;justify-content:center;color:#4a6070;font-size:9px;letter-spacing:2px;}'
+        + '.card-body{padding:7px 9px 9px;}'
+        + '.card-num{font-size:9px;color:#00e5ff;letter-spacing:0.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:5px;}'
+        + '.card-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;}'
+        + '.card-idx{font-size:8px;color:#4a6070;}'
+        + '.badge{font-size:7px;letter-spacing:1px;padding:2px 5px;border:1px solid;display:inline-block;}'
+        + '.b-ativa{color:#39ff14;border-color:rgba(57,255,20,0.4);}'
+        + '.b-inativa{color:#ff4444;border-color:rgba(255,68,68,0.4);}'
+        + '.b-biz{color:#ffbe00;border-color:rgba(255,190,0,0.35);}'
+        + '.card-about{font-size:8px;color:rgba(0,229,255,0.45);margin-top:3px;font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}'
+        + '.card-about.biz{color:#ffbe00;}'
+        + '.card-operadora{font-size:9px;color:#00e5ff;margin-top:3px;letter-spacing:1px;}'
+        + '.flagged{border-color:#ff3d71!important;}'
+        + '.hidden{display:none;}'
+        + '</style></head><body>'
+        + '<h1>INTEL - GALERIA DE PERFIS</h1>'
+        + '<p class="meta">Gerado em: ' + new Date().toLocaleString('pt-BR') + ' &nbsp;&middot;&nbsp; ' + profiles.length + ' perfis analisados &nbsp;&middot;&nbsp; ' + withPhoto.length + ' com foto</p>'
+        + '<div class="filters">'
+        + '<button class="filter-btn active" onclick="setFilter('todos',this)">TODOS</button>'
+        + '<button class="filter-btn" onclick="setFilter('comfoto',this)">COM FOTO</button>'
+        + '<button class="filter-btn" onclick="setFilter('semfoto',this)">SEM FOTO</button>'
+        + '<button class="filter-btn" onclick="setFilter('inativas',this)">INATIVAS</button>'
+        + '</div>'
+        + '<div class="grid" id="grid">' + cardsHtml + '</div>'
+        + '<script>function setFilter(f,btn){document.querySelectorAll(".filter-btn").forEach(b=>b.classList.remove("active"));btn.classList.add("active");document.querySelectorAll(".card").forEach(c=>{c.classList.toggle("hidden",f!=="todos"&&!c.dataset.cat.includes(f));});}<\/script>'
+        + '</body></html>';
 
       zip.file('galeria.html', galleryHtml);
 
