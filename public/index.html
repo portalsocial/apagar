@@ -868,12 +868,59 @@
         flagged: p.flagged || false
       })));
 
-      const galleryHtml = `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<title>INTEL · Galeria de Perfis</title>
-<style>
+      // JS da galeria montado como string separada para evitar conflito de tags <script> no template literal
+      const galleryScript = [
+        'const DATA = ' + cardsJson + ';',
+        "let currentFilter = 'all';",
+        '',
+        'function setFilter(f, btn) {',
+        '  currentFilter = f;',
+        "  document.querySelectorAll('.tb').forEach(b => b.classList.remove('active'));",
+        '  btn.classList.add(\'active\');',
+        '  renderCards();',
+        '}',
+        '',
+        'function renderCards() {',
+        "  const search = document.getElementById('searchBox').value.toLowerCase();",
+        "  const grid = document.getElementById('grid');",
+        '  const filtered = DATA.filter(p => {',
+        '    if (!p.number.toLowerCase().includes(search)) return false;',
+        "    if (currentFilter === 'comfoto')  return !!p.b64;",
+        "    if (currentFilter === 'semfoto')  return !p.b64 && !p.noWhatsApp;",
+        "    if (currentFilter === 'inativas') return !!p.noWhatsApp;",
+        '    return true;',
+        '  });',
+        "  document.getElementById('countLabel').textContent = filtered.length;",
+        '  if (!filtered.length) {',
+        '    grid.innerHTML = \'<div class="empty">NENHUM RESULTADO PARA O FILTRO SELECIONADO</div>\';',
+        '    return;',
+        '  }',
+        '  const noPhotoSvg = \'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>\';',
+        '  grid.innerHTML = filtered.map(p => {',
+        "    const bClass = p.noWhatsApp ? 'b-inativa' : 'b-ativa';",
+        "    const bLabel = p.noWhatsApp ? 'CONTA INATIVA' : 'CONTA ATIVA';",
+        "    const imgTag = p.b64",
+        '      ? \'<img src="data:image/\' + p.ext + \';base64,\' + p.b64 + \'" alt="" loading="lazy">\'',
+        "      : '<div class=\"nophoto\">' + noPhotoSvg + (p.noWhatsApp ? 'INATIVA' : 'SEM FOTO') + '</div>';",
+        '    return \'<div class="card\' + (p.flagged ? \' flagged\' : \'\') + \'">\' ',
+        '      + \'<div class="card-corner"></div>\'',
+        '      + \'<div class="card-photo">\' + imgTag + \'</div>\'',
+        '      + \'<div class="card-foot">\'',
+        '      + (p.isBusiness ? \'<div class="biz-badge">&#8853; BUSINESS</div>\' : \'\')',
+        '      + (p.isBusiness && p.businessName ? \'<div class="biz-name">\' + p.businessName + \'</div>\' : \'\')',
+        '      + (p.isBusiness && p.businessCategory ? \'<div class="biz-cat">\' + p.businessCategory + \'</div>\' : \'\')',
+        '      + \'<div class="card-num">\' + p.number + \'</div>\'',
+        '      + \'<div class="card-row"><span class="badge \' + bClass + \'">\' + bLabel + \'</span><span class="card-idx">#\' + String(p.index).padStart(3,\'0\') + \'</span></div>\'',
+        '      + \'<div class="card-about\' + (p.about ? \' has-text\' : \'\') + \'">\' + (p.about || \'&#8212;\') + \'</div>\'',
+        '      + (p.operadora ? \'<div class="card-operadora">&#128225; \' + p.operadora + \'</div>\' : \'\')',
+        "      + '</div></div>';",
+        "  }).join('');",
+        '}',
+        '',
+        'renderCards();'
+      ].join('\n');
+
+      const galleryCss = `
   @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;600;700&display=swap');
   :root{--bg:#050a0e;--bg2:#0a1520;--bg3:#0d1e2e;--accent:#00e5ff;--green:#39ff14;--red:#ff3d71;--text:#c8d8e8;--dim:#4a6070;--border:rgba(0,229,255,0.15);--glow:0 0 20px rgba(0,229,255,0.3);}
   *{margin:0;padding:0;box-sizing:border-box;}
@@ -921,89 +968,39 @@
   .empty{grid-column:1/-1;text-align:center;padding:60px 20px;font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:2px;}
   ::-webkit-scrollbar{width:3px;}
   ::-webkit-scrollbar-track{background:var(--bg);}
-  ::-webkit-scrollbar-thumb{background:rgba(0,229,255,0.15);}
-</style>
-</head>
-<body>
-<header>
-  <h1>⬡ INTEL · GALERIA DE PERFIS</h1>
-  <div class="meta">Gerado em: <b>${new Date().toLocaleString('pt-BR')}</b></div>
-  <div class="stats">
-    <div class="stat">TOTAL <b>${profiles.length}</b></div>
-    <div class="stat">COM FOTO <b>${withPhoto.length}</b></div>
-    <div class="stat">ZAP ATIVO <b>${profiles.filter(p=>!p.noWhatsApp&&p.found!==null).length}</b></div>
-    <div class="stat">INATIVO <b>${profiles.filter(p=>p.noWhatsApp).length}</b></div>
-    <div class="stat">BUSINESS <b>${profiles.filter(p=>p.isBusiness).length}</b></div>
-    <div class="stat">MARCADOS <b>${profiles.filter(p=>p.flagged).length}</b></div>
-  </div>
-</header>
+  ::-webkit-scrollbar-thumb{background:rgba(0,229,255,0.15);}`;
 
-<div class="toolbar">
-  <input type="text" class="search" id="searchBox" placeholder="BUSCAR NÚMERO..." oninput="renderCards()">
-  <button class="tb active" onclick="setFilter('all',this)">TODOS</button>
-  <button class="tb" onclick="setFilter('comfoto',this)">COM FOTO</button>
-  <button class="tb" onclick="setFilter('semfoto',this)">SEM FOTO</button>
-  <button class="tb" onclick="setFilter('inativas',this)">INATIVAS</button>
-  <span class="count-label">EXIBINDO <b id="countLabel">0</b></span>
-</div>
+      const now = new Date().toLocaleString('pt-BR');
+      const statTotal    = profiles.length;
+      const statFoto     = withPhoto.length;
+      const statAtivo    = profiles.filter(p=>!p.noWhatsApp&&p.found!==null).length;
+      const statInativo  = profiles.filter(p=>p.noWhatsApp).length;
+      const statBiz      = profiles.filter(p=>p.isBusiness).length;
+      const statFlag     = profiles.filter(p=>p.flagged).length;
 
-<div class="grid" id="grid"></div>
-
-${'<script>'}
-const DATA = ${cardsJson};
-let currentFilter = 'all';
-
-function setFilter(f, btn) {
-  currentFilter = f;
-  document.querySelectorAll('.tb').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  renderCards();
-}
-
-function renderCards() {
-  const search = document.getElementById('searchBox').value.toLowerCase();
-  const grid = document.getElementById('grid');
-
-  const filtered = DATA.filter(p => {
-    if (!p.number.toLowerCase().includes(search)) return false;
-    if (currentFilter === 'comfoto')  return !!p.b64;
-    if (currentFilter === 'semfoto')  return !p.b64 && !p.noWhatsApp;
-    if (currentFilter === 'inativas') return !!p.noWhatsApp;
-    return true;
-  });
-
-  document.getElementById('countLabel').textContent = filtered.length;
-
-  if (!filtered.length) {
-    grid.innerHTML = '<div class="empty">NENHUM RESULTADO PARA O FILTRO SELECIONADO</div>';
-    return;
-  }
-
-  grid.innerHTML = filtered.map(p => {
-    const bClass = p.noWhatsApp ? 'b-inativa' : 'b-ativa';
-    const bLabel = p.noWhatsApp ? 'CONTA INATIVA' : 'CONTA ATIVA';
-    const noPhotoSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
-    const imgTag = p.b64
-      ? '<img src="data:image/' + p.ext + ';base64,' + p.b64 + '" alt="' + p.number.replace(/"/g,'') + '" loading="lazy">'
-      : '<div class="nophoto">' + noPhotoSvg + (p.noWhatsApp ? 'INATIVA' : 'SEM FOTO') + '</div>';
-    return '<div class="card' + (p.flagged ? ' flagged' : '') + '">'
-      + '<div class="card-corner"></div>'
-      + '<div class="card-photo">' + imgTag + '</div>'
-      + '<div class="card-foot">'
-      + (p.isBusiness ? '<div class="biz-badge">⊕ BUSINESS</div>' : '')
-      + (p.isBusiness && p.businessName ? '<div class="biz-name">' + p.businessName + '</div>' : '')
-      + (p.isBusiness && p.businessCategory ? '<div class="biz-cat">' + p.businessCategory + '</div>' : '')
-      + '<div class="card-num">' + p.number + '</div>'
-      + '<div class="card-row"><span class="badge ' + bClass + '">' + bLabel + '</span><span class="card-idx">#' + String(p.index).padStart(3,'0') + '</span></div>'
-      + '<div class="card-about' + (p.about ? ' has-text' : '') + '">' + (p.about || '—') + '</div>'
-      + (p.operadora ? '<div class="card-operadora">📡 ' + p.operadora + '</div>' : '')
-      + '</div></div>';
-  }).join('');
-}
-
-renderCards();
-${'</script>'}
-</body></html>`;
+      const galleryHtml = '<!DOCTYPE html>\n<html lang="pt-BR">\n<head>\n<meta charset="UTF-8">\n<title>INTEL \xB7 Galeria de Perfis</title>\n<style>' + galleryCss + '\n</style>\n</head>\n<body>\n'
+        + '<header>\n'
+        + '  <h1>&#11041; INTEL \xB7 GALERIA DE PERFIS</h1>\n'
+        + '  <div class="meta">Gerado em: <b>' + now + '</b></div>\n'
+        + '  <div class="stats">\n'
+        + '    <div class="stat">TOTAL <b>' + statTotal + '</b></div>\n'
+        + '    <div class="stat">COM FOTO <b>' + statFoto + '</b></div>\n'
+        + '    <div class="stat">ZAP ATIVO <b>' + statAtivo + '</b></div>\n'
+        + '    <div class="stat">INATIVO <b>' + statInativo + '</b></div>\n'
+        + '    <div class="stat">BUSINESS <b>' + statBiz + '</b></div>\n'
+        + '    <div class="stat">MARCADOS <b>' + statFlag + '</b></div>\n'
+        + '  </div>\n</header>\n'
+        + '<div class="toolbar">\n'
+        + '  <input type="text" class="search" id="searchBox" placeholder="BUSCAR N\xDAMERO..." oninput="renderCards()">\n'
+        + '  <button class="tb active" onclick="setFilter(\'all\',this)">TODOS</button>\n'
+        + '  <button class="tb" onclick="setFilter(\'comfoto\',this)">COM FOTO</button>\n'
+        + '  <button class="tb" onclick="setFilter(\'semfoto\',this)">SEM FOTO</button>\n'
+        + '  <button class="tb" onclick="setFilter(\'inativas\',this)">INATIVAS</button>\n'
+        + '  <span class="count-label">EXIBINDO <b id="countLabel">0</b></span>\n'
+        + '</div>\n'
+        + '<div class="grid" id="grid"></div>\n'
+        + '<script>\n' + galleryScript + '\n<\/script>\n'
+        + '</body></html>';
 
       zip.file('galeria.html', galleryHtml);
 
