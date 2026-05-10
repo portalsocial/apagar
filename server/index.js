@@ -32,15 +32,6 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
-// CORS — permite chamadas do GitHub Pages
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
-
 const AUTH_DIR = process.env.AUTH_DIR || path.resolve(process.cwd(), 'auth_info');
 
 let sock = null;
@@ -276,8 +267,15 @@ app.post('/api/photos/batch', async (req, res) => {
         const [waResult] = await sock.onWhatsApp(number);
         if (!waResult || !waResult.exists) {
           noWhatsApp = true;
-          result = { number: raw, photoUrl: null, about: null, found: false, noWhatsApp: true, isBusiness: false, businessName: null, businessCategory: null, businessDescription: null, index: i };
-          profileCache[number] = { ...result };
+
+          // Mesmo quando a linha nao possui WhatsApp, tenta consultar a operadora.
+          let operadora = null;
+          try {
+            operadora = await consultarOperadora(number);
+          } catch(e) {}
+
+          result = { number: raw, photoUrl: null, about: null, found: false, noWhatsApp: true, isBusiness: false, businessName: null, businessCategory: null, businessDescription: null, operadora, index: i };
+          profileCache[number] = { number: raw, photoUrl: null, about: null, found: false, noWhatsApp: true, isBusiness: false, businessName: null, businessCategory: null, businessDescription: null, operadora };
           res.write(`data: ${JSON.stringify({ ...result, progress: i + 1, total: numbers.length })}
 
 `);
