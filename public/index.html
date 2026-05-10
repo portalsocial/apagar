@@ -2,6 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
+<meta name="api-url" content="">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>INTEL · Perfis WhatsApp</title>
 <style>
@@ -296,10 +297,11 @@
 </div>
 
 <script>
-  // URL base da API — detecta automaticamente onde está rodando
-  const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-    ? ''
-    : 'https://bucawhatsapp.onrender.com';
+  // URL base da API
+  // Quando rodando no mesmo servidor (Oracle, VPS, Render): deixe content= na meta tag abaixo
+  // Quando usando GitHub Pages: coloque a URL do Render na meta tag api-url no <head>
+  // Exemplo: <meta name="api-url" content="https://bucawhatsapp.onrender.com">
+  const API_BASE = document.querySelector('meta[name="api-url"]')?.content || '';
 
   let profiles = [];
   let currentFilter = 'all';
@@ -859,6 +861,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
+
 <title>INTEL · Galeria de Perfis</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;}
