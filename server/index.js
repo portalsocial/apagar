@@ -32,7 +32,7 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
-// CORS — permite chamadas do GitHub Pages e qualquer origem
+// CORS — permite chamadas do GitHub Pages
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
