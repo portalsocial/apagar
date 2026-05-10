@@ -267,15 +267,8 @@ app.post('/api/photos/batch', async (req, res) => {
         const [waResult] = await sock.onWhatsApp(number);
         if (!waResult || !waResult.exists) {
           noWhatsApp = true;
-
-          // Mesmo quando a linha nao possui WhatsApp, tenta consultar a operadora.
-          let operadora = null;
-          try {
-            operadora = await consultarOperadora(number);
-          } catch(e) {}
-
-          result = { number: raw, photoUrl: null, about: null, found: false, noWhatsApp: true, isBusiness: false, businessName: null, businessCategory: null, businessDescription: null, operadora, index: i };
-          profileCache[number] = { number: raw, photoUrl: null, about: null, found: false, noWhatsApp: true, isBusiness: false, businessName: null, businessCategory: null, businessDescription: null, operadora };
+          result = { number: raw, photoUrl: null, about: null, found: false, noWhatsApp: true, isBusiness: false, businessName: null, businessCategory: null, businessDescription: null, index: i };
+          profileCache[number] = { ...result };
           res.write(`data: ${JSON.stringify({ ...result, progress: i + 1, total: numbers.length })}
 
 `);
