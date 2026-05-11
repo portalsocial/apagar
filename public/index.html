@@ -637,6 +637,9 @@
     const decoder = new TextDecoder();
     let buf = '';
 
+    let lastRender = 0;
+    const RENDER_INTERVAL = 150; // ms
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -664,9 +667,21 @@
         const pct = Math.round((data.progress / data.total) * 100);
         document.getElementById('progFill').style.width = pct + '%';
         document.getElementById('progTxt').textContent = `${data.progress} / ${data.total} — ${data.found ? '✓ foto' : '✗ sem foto'}`;
-        renderSideList(); renderGrid(); updateStats();
+        
+        // Throttle: atualiza interface só a cada RENDER_INTERVAL ms ou no último
+        const now = Date.now();
+        if (now - lastRender >= RENDER_INTERVAL || data.progress === data.total) {
+          renderSideList();
+          renderGrid();
+          updateStats();
+          lastRender = now;
+        }
       }
     }
+    // Garante renderização final
+    renderSideList();
+    renderGrid();
+    updateStats();
     isBusy = false;
     document.getElementById('btnBuscar').disabled = false;
   }
@@ -968,7 +983,7 @@
   .empty{grid-column:1/-1;text-align:center;padding:60px 20px;font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:2px;}
   ::-webkit-scrollbar{width:3px;}
   ::-webkit-scrollbar-track{background:var(--bg);}
-  ::-webkit-scrollbar-thumb{background:rgba(0,229,255,0.15);}`;
+  ::-webkit-scrollbar-thumb{background:rgba(0,229,255,0.15);border-radius:2px;}`;
 
       const now = new Date().toLocaleString('pt-BR');
       const statTotal    = profiles.length;
