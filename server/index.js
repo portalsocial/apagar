@@ -3,8 +3,9 @@ const QRCode = require('qrcode');
 const path = require('path');
 const pino = require('pino');
 const fs = require('fs');
+const pMap = require('p-map'); // npm install p-map
 
-// Captura erros globais para evitar que o servidor encerre
+// Captura erros globais
 process.on('uncaughtException', (err) => {
   console.error('[INTEL] Erro nao capturado:', err.message);
 });
@@ -55,7 +56,7 @@ async function getCelcoinToken() {
     });
     const data = await res.json();
     celcoinToken = data.access_token;
-    celcoinTokenExpiry = Date.now() + (2300 * 1000); // 2300s de margem
+    celcoinTokenExpiry = Date.now() + (2300 * 1000);
     return celcoinToken;
   } catch(e) {
     console.error('[INTEL] Erro ao obter token CelCoin:', e.message);
@@ -67,7 +68,6 @@ async function consultarOperadora(number) {
   try {
     const token = await getCelcoinToken();
     if (!token) return null;
-    // Remove codigo do pais +55 se existir
     let normalized = number;
     if (normalized.startsWith('55') && normalized.length > 11) {
       normalized = normalized.slice(2);
@@ -79,7 +79,6 @@ async function consultarOperadora(number) {
       { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
     );
     const data = await res.json();
-    console.log('[INTEL] Operadora:', number, '->', data.nameProvider || 'N/A');
     if (data && data.nameProvider && data.errorCode === '000') {
       return data.nameProvider;
     }
@@ -93,7 +92,6 @@ async function consultarOperadora(number) {
 async function connectWhatsApp() {
   try {
     await loadBaileys();
-
     fs.mkdirSync(AUTH_DIR, { recursive: true });
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -107,8 +105,6 @@ async function connectWhatsApp() {
       version = [2, 3000, 1015901307];
       console.log('[INTEL] Usando versao WA padrao:', version.join('.'));
     }
-
-    console.log('[INTEL] Pasta de sessao:', AUTH_DIR);
 
     sock = makeWASocket({
       version,
@@ -132,36 +128,23 @@ async function connectWhatsApp() {
     sock.ev.on('connection.update', async (update) => {
       try {
         const { connection, lastDisconnect, qr } = update;
-
         if (qr) {
           connectionStatus = 'qr';
           qrCodeData = await QRCode.toDataURL(qr, { errorCorrectionLevel: 'L', width: 300 });
-          console.log('[INTEL] QR Code gerado! Acesse o dashboard para escanear.');
+          console.log('[INTEL] QR Code gerado!');
         }
-
         if (connection === 'open') {
           connectionStatus = 'connected';
           qrCodeData = null;
-          console.log('[INTEL] Conectado ao WhatsApp com sucesso!');
+          console.log('[INTEL] Conectado ao WhatsApp!');
         }
-
         if (connection === 'close') {
           const code = lastDisconnect?.error?.output?.statusCode;
-
           connectionStatus = 'disconnected';
-
           console.log('[INTEL] Conexao encerrada. Codigo:', code);
-
-          const shouldClearSession =
-            code === DisconnectReason.loggedOut;
-
+          const shouldClearSession = code === DisconnectReason.loggedOut;
           if (shouldClearSession) {
-            console.log('[INTEL] Sessao invalida. Limpando auth_info...');
-
-            try {
-              fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-            } catch (e) {}
-
+            try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (e) {}
             setTimeout(connectWhatsApp, 3000);
           } else {
             setTimeout(connectWhatsApp, 5000);
@@ -187,9 +170,7 @@ async function connectWhatsApp() {
       for (const msg of messages || []) {
         const jid = msg.key?.remoteJid;
         if (!jid) continue;
-
         if (!messagesCache[jid]) messagesCache[jid] = [];
-
         const text =
           msg.message?.conversation ||
           msg.message?.extendedTextMessage?.text ||
@@ -197,17 +178,13 @@ async function connectWhatsApp() {
           msg.message?.videoMessage?.caption ||
           msg.message?.documentMessage?.caption ||
           '[sem texto]';
-
         messagesCache[jid].push({
           id: msg.key?.id,
           fromMe: !!msg.key?.fromMe,
           timestamp: msg.messageTimestamp ? Number(msg.messageTimestamp) : Math.floor(Date.now() / 1000),
           text
         });
-
-        if (messagesCache[jid].length > 200) {
-          messagesCache[jid] = messagesCache[jid].slice(-200);
-        }
+        if (messagesCache[jid].length > 200) messagesCache[jid] = messagesCache[jid].slice(-200);
       }
     });
 
@@ -244,107 +221,105 @@ app.post('/api/photos/batch', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
-  for (let i = 0; i < numbers.length; i++) {
-    const raw = numbers[i].trim();
+  const processNumber = async (raw, idx) => {
     const number = raw.replace(/\D/g, '');
     const jid = `${number}@s.whatsapp.net`;
-    let result = { number: raw, photoUrl: null, found: false, index: i };
 
     if (profileCache[number]) {
-      result = { ...profileCache[number], number: raw, index: i };
-    } else {
-      let photoUrl = null;
-      let about = null;
-      let found = false;
-      let isBusiness = false;
-      let businessName = null;
-      let businessCategory = null;
-      let businessDescription = null;
-      let noWhatsApp = false;
-
-      // Verifica se o numero tem WhatsApp instalado
-      try {
-        const [waResult] = await sock.onWhatsApp(number);
-        if (!waResult || !waResult.exists) {
-          noWhatsApp = true;
-          result = { number: raw, photoUrl: null, about: null, found: false, noWhatsApp: true, isBusiness: false, businessName: null, businessCategory: null, businessDescription: null, index: i };
-          profileCache[number] = { ...result };
-          res.write(`data: ${JSON.stringify({ ...result, progress: i + 1, total: numbers.length })}
-
-`);
-          if (i < numbers.length - 1) await new Promise(r => setTimeout(r, 900 + Math.random() * 600));
-          continue;
-        }
-      } catch (e) {}
-
-      try {
-        const bizProfile = await sock.getBusinessProfile(jid);
-        if (bizProfile && bizProfile.wid) {
-          isBusiness = true;
-          found = true;
-          businessName = bizProfile.name || null;
-          businessCategory = bizProfile.category || null;
-          businessDescription = bizProfile.description || null;
-          about = bizProfile.description || null;
-          console.log('[INTEL] Conta Business detectada:', raw, businessName);
-        }
-      } catch (e) {}
-
-      const jidVariants = [jid, number + '@c.us'];
-      for (const tryJid of jidVariants) {
-        if (photoUrl) break;
-        try {
-          photoUrl = await sock.profilePictureUrl(tryJid, 'image');
-          found = true;
-          break;
-        } catch (e) {}
-        try {
-          photoUrl = await sock.profilePictureUrl(tryJid, 'preview');
-          found = true;
-          break;
-        } catch (e) {}
-      }
-
-      if (!photoUrl && isBusiness) {
-        try {
-          photoUrl = await sock.profilePictureUrl(number + '@s.whatsapp.net', 'image');
-          found = true;
-        } catch (e) {}
-      }
-
-      if (!about) {
-        try {
-          const statusResult = await sock.fetchStatus(jid);
-          let rawStatus = statusResult;
-          if (Array.isArray(rawStatus)) rawStatus = rawStatus[0];
-          if (rawStatus && typeof rawStatus === 'object') rawStatus = rawStatus.status ?? null;
-          if (rawStatus && typeof rawStatus === 'object') rawStatus = rawStatus.status ?? null;
-
-          about = (typeof rawStatus === 'string' && rawStatus.trim()) ? rawStatus.trim() : null;
-
-          const defaults = [
-            'Hey there! I am using WhatsApp.',
-            'Olá! Eu estou usando o WhatsApp.',
-            'Available',
-            'Busy',
-          ];
-          if (about && defaults.includes(about)) about = null;
-        } catch (e) {}
-      }
-
-      // Consulta operadora via CelCoin
-      let operadora = null;
-      try {
-        operadora = await consultarOperadora(number);
-      } catch(e) {}
-
-      result = { number: raw, photoUrl, about, found, noWhatsApp, isBusiness, businessName, businessCategory, businessDescription, operadora, index: i };
-      profileCache[number] = { number: raw, photoUrl, about, found, noWhatsApp, isBusiness, businessName, businessCategory, businessDescription, operadora };
+      return { ...profileCache[number], number: raw, index: idx };
     }
 
-    res.write(`data: ${JSON.stringify({ ...result, progress: i + 1, total: numbers.length })}\n\n`);
-    if (i < numbers.length - 1) await new Promise(r => setTimeout(r, 900 + Math.random() * 600));
-  }
+    let photoUrl = null;
+    let about = null;
+    let found = false;
+    let isBusiness = false;
+    let businessName = null;
+    let businessCategory = null;
+    let businessDescription = null;
+    let noWhatsApp = false;
+    let operadora = null;
+
+    // 1) Verifica existência do WhatsApp
+    try {
+      const [waResult] = await sock.onWhatsApp(number);
+      if (!waResult || !waResult.exists) {
+        noWhatsApp = true;
+        const result = { number: raw, photoUrl: null, about: null, found: false, noWhatsApp: true, isBusiness: false, businessName: null, businessCategory: null, businessDescription: null, operadora: null, index: idx };
+        profileCache[number] = { ...result };
+        return result;
+      }
+    } catch (e) {}
+
+    // 2) Business Profile
+    try {
+      const bizProfile = await sock.getBusinessProfile(jid);
+      if (bizProfile && bizProfile.wid) {
+        isBusiness = true;
+        found = true;
+        businessName = bizProfile.name || null;
+        businessCategory = bizProfile.category || null;
+        businessDescription = bizProfile.description || null;
+        about = bizProfile.description || null;
+      }
+    } catch (e) {}
+
+    // 3) Foto de perfil
+    const jidVariants = [jid, number + '@c.us'];
+    for (const tryJid of jidVariants) {
+      if (photoUrl) break;
+      try {
+        photoUrl = await sock.profilePictureUrl(tryJid, 'image');
+        found = true;
+        break;
+      } catch (e) {}
+      try {
+        photoUrl = await sock.profilePictureUrl(tryJid, 'preview');
+        found = true;
+        break;
+      } catch (e) {}
+    }
+    if (!photoUrl && isBusiness) {
+      try {
+        photoUrl = await sock.profilePictureUrl(number + '@s.whatsapp.net', 'image');
+        found = true;
+      } catch (e) {}
+    }
+
+    // 4) Sobre/recado
+    if (!about) {
+      try {
+        const statusResult = await sock.fetchStatus(jid);
+        let rawStatus = statusResult;
+        if (Array.isArray(rawStatus)) rawStatus = rawStatus[0];
+        if (rawStatus && typeof rawStatus === 'object') rawStatus = rawStatus.status ?? null;
+        if (rawStatus && typeof rawStatus === 'object') rawStatus = rawStatus.status ?? null;
+        about = (typeof rawStatus === 'string' && rawStatus.trim()) ? rawStatus.trim() : null;
+        const defaults = ['Hey there! I am using WhatsApp.', 'Olá! Eu estou usando o WhatsApp.', 'Available', 'Busy'];
+        if (about && defaults.includes(about)) about = null;
+      } catch (e) {}
+    }
+
+    // 5) Operadora (opcional – comentar para máxima velocidade)
+    try {
+      operadora = await consultarOperadora(number);
+    } catch(e) {}
+
+    const result = { number: raw, photoUrl, about, found, noWhatsApp, isBusiness, businessName, businessCategory, businessDescription, operadora, index: idx };
+    profileCache[number] = result;
+    return result;
+  };
+
+  const concurrency = 5; // Números simultâneos – ajuste conforme necessidade
+  let completed = 0;
+
+  const mapper = async (raw, idx) => {
+    const resItem = await processNumber(raw, idx);
+    completed++;
+    res.write(`data: ${JSON.stringify({ ...resItem, progress: completed, total: numbers.length })}\n\n`);
+    return resItem;
+  };
+
+  await pMap(numbers, mapper, { concurrency });
 
   res.write('data: {"done":true}\n\n');
   res.end();
@@ -359,10 +334,8 @@ app.get('/api/chats', (req, res) => {
   const q = String(req.query.q || '').toLowerCase();
   const chats = chatsCache.filter((chat) => {
     if (!q) return true;
-    return (
-      String(chat.name || '').toLowerCase().includes(q) ||
-      String(chat.id || '').toLowerCase().includes(q)
-    );
+    return String(chat.name || '').toLowerCase().includes(q) ||
+           String(chat.id || '').toLowerCase().includes(q);
   });
   res.json({ ok: true, chats: chats.slice(0, 200) });
 });
