@@ -3,9 +3,7 @@ const QRCode = require('qrcode');
 const path = require('path');
 const pino = require('pino');
 const fs = require('fs');
-const pMap = require('p-map'); // npm install p-map
 
-// Captura erros globais
 process.on('uncaughtException', (err) => {
   console.error('[INTEL] Erro nao capturado:', err.message);
 });
@@ -42,7 +40,6 @@ let profileCache = {};
 let chatsCache = [];
 let messagesCache = {};
 
-// Cache do token CelCoin
 let celcoinToken = null;
 let celcoinTokenExpiry = 0;
 
@@ -93,9 +90,7 @@ async function connectWhatsApp() {
   try {
     await loadBaileys();
     fs.mkdirSync(AUTH_DIR, { recursive: true });
-
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-
     let version;
     try {
       const result = await fetchLatestBaileysVersion();
@@ -105,7 +100,6 @@ async function connectWhatsApp() {
       version = [2, 3000, 1015901307];
       console.log('[INTEL] Usando versao WA padrao:', version.join('.'));
     }
-
     sock = makeWASocket({
       version,
       auth: {
@@ -212,6 +206,7 @@ app.post('/api/reconnect', async (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Endpoint BATCH com paralelismo manual (5 workers) ---
 app.post('/api/photos/batch', async (req, res) => {
   if (connectionStatus !== 'connected') return res.status(503).json({ error: 'Nao conectado' });
   const { numbers } = req.body;
@@ -239,7 +234,6 @@ app.post('/api/photos/batch', async (req, res) => {
     let noWhatsApp = false;
     let operadora = null;
 
-    // 1) Verifica existência do WhatsApp
     try {
       const [waResult] = await sock.onWhatsApp(number);
       if (!waResult || !waResult.exists) {
@@ -250,7 +244,6 @@ app.post('/api/photos/batch', async (req, res) => {
       }
     } catch (e) {}
 
-    // 2) Business Profile
     try {
       const bizProfile = await sock.getBusinessProfile(jid);
       if (bizProfile && bizProfile.wid) {
@@ -263,7 +256,6 @@ app.post('/api/photos/batch', async (req, res) => {
       }
     } catch (e) {}
 
-    // 3) Foto de perfil
     const jidVariants = [jid, number + '@c.us'];
     for (const tryJid of jidVariants) {
       if (photoUrl) break;
@@ -285,7 +277,6 @@ app.post('/api/photos/batch', async (req, res) => {
       } catch (e) {}
     }
 
-    // 4) Sobre/recado
     if (!about) {
       try {
         const statusResult = await sock.fetchStatus(jid);
@@ -299,7 +290,6 @@ app.post('/api/photos/batch', async (req, res) => {
       } catch (e) {}
     }
 
-    // 5) Operadora (opcional – comentar para máxima velocidade)
     try {
       operadora = await consultarOperadora(number);
     } catch(e) {}
@@ -309,17 +299,23 @@ app.post('/api/photos/batch', async (req, res) => {
     return result;
   };
 
-  const concurrency = 5; // Números simultâneos – ajuste conforme necessidade
+  // Pool manual com 5 workers (não precisa de p-map)
+  const CONCURRENCY = 5;
   let completed = 0;
+  let currentIdx = 0;
 
-  const mapper = async (raw, idx) => {
-    const resItem = await processNumber(raw, idx);
-    completed++;
-    res.write(`data: ${JSON.stringify({ ...resItem, progress: completed, total: numbers.length })}\n\n`);
-    return resItem;
-  };
+  async function worker() {
+    while (currentIdx < numbers.length) {
+      const idx = currentIdx++;
+      const raw = numbers[idx];
+      const result = await processNumber(raw, idx);
+      completed++;
+      res.write(`data: ${JSON.stringify({ ...result, progress: completed, total: numbers.length })}\n\n`);
+    }
+  }
 
-  await pMap(numbers, mapper, { concurrency });
+  const workers = Array(Math.min(CONCURRENCY, numbers.length)).fill().map(() => worker());
+  await Promise.all(workers);
 
   res.write('data: {"done":true}\n\n');
   res.end();
@@ -334,8 +330,7 @@ app.get('/api/chats', (req, res) => {
   const q = String(req.query.q || '').toLowerCase();
   const chats = chatsCache.filter((chat) => {
     if (!q) return true;
-    return String(chat.name || '').toLowerCase().includes(q) ||
-           String(chat.id || '').toLowerCase().includes(q);
+    return String(chat.name || '').toLowerCase().includes(q) || String(chat.id || '').toLowerCase().includes(q);
   });
   res.json({ ok: true, chats: chats.slice(0, 200) });
 });
