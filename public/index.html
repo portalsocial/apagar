@@ -323,7 +323,10 @@
     <div class="extrato-panel" id="extratoPanel" style="display:none">
       <div class="extrato-header">
         <span class="extrato-title" id="extratoPanelTitle">IPs DO EXTRATO</span>
-        <button class="extrato-close" onclick="fecharExtrato()">✕ FECHAR</button>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="extrato-close" id="btnExportIPs" onclick="exportIPsZip()" style="border-color:rgba(0,229,255,0.4);color:var(--accent)">⬇ EXPORTAR IPs .ZIP</button>
+          <button class="extrato-close" onclick="fecharExtrato()">✕ FECHAR</button>
+        </div>
       </div>
       <div class="extrato-filters">
         <button class="extrato-filter-btn active" onclick="setExtratoFiltro('todos',this)">TODOS</button>
@@ -1782,6 +1785,303 @@
     }
 
     input.value = '';
+  }
+
+  // Funções da galeria de IPs — definidas aqui e serializadas via .toString()
+  // para evitar qualquer problema de escape de strings ao embutir no HTML gerado.
+  function _ipGalleryRender() {
+    function esc(v) {
+      return String(v || '').replace(/[&<>"]/g, function(c) {
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];
+      });
+    }
+    function dp(v) {
+      var d = String(v || '').replace(/\D/g, '');
+      return d ? '+' + d : (String(v || '').trim() || '\u2014');
+    }
+    var cf = 'all';
+    window.setF = function(f, btn) {
+      cf = f;
+      document.querySelectorAll('.tb').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      render();
+    };
+    function render() {
+      var q = document.getElementById('srch').value.toLowerCase().trim();
+      var filtered = DATA.filter(function(c) {
+        if (cf === 'alvo' && !c.tipos.includes('alvo')) return false;
+        if (cf === 'inter' && !c.tipos.includes('interlocutor')) return false;
+        if (cf === 'common' && !c.isCommon) return false;
+        if (cf === 'prov' && !c.provider) return false;
+        if (!q) return true;
+        var h = [c.ip, c.interlocutor].concat(c.alvos, c.investigados, c.devices, [c.provider || '', c.asn || '', c.commonLabel || '']).join(' ').toLowerCase();
+        return h.includes(q) || String(c.ip).includes(q);
+      });
+      document.getElementById('cl').innerHTML = 'Exibindo <b>' + filtered.length + '</b> de ' + DATA.length + ' registros';
+      var grid = document.getElementById('grid');
+      if (!filtered.length) {
+        grid.innerHTML = '<div class="empty"><div class="empty-big">SEM RESULTADOS</div>Nenhum IP corresponde ao filtro selecionado.</div>';
+        return;
+      }
+      grid.innerHTML = filtered.map(function(c, i) {
+        var delay = (i * 0.025).toFixed(3);
+        var ipCls = c.ipv6 ? 'ipv6' : '';
+        var commonCls = c.isCommon ? ' common' : '';
+        var badges = '';
+        if (c.tipos.includes('alvo'))          badges += '<span class="badge b-alvo">ALVO</span>';
+        if (c.tipos.includes('interlocutor'))  badges += '<span class="badge b-inter">INTERLOCUT.</span>';
+        if (c.isCommon)                        badges += '<span class="badge b-common">\u26d3 IP COMUM</span>';
+        if (c.ipv6)                            badges += '<span class="badge b-ipv6">IPv6</span>';
+        var prov = '';
+        if (c.provider) {
+          prov = '<div class="row"><div class="row-key">PROVEDOR</div><div class="row-val gold">' + esc(c.provider) + (c.asn ? '<span style="color:var(--dim);font-size:8px"> \u00b7 ' + esc(c.asn) + '</span>' : '') + '</div></div>';
+        } else if (c.providerError) {
+          prov = '<div class="row"><div class="row-key">PROVEDOR</div><div class="row-val err">n\u00e3o localizado</div></div>';
+        } else {
+          prov = '<div class="row"><div class="row-key">PROVEDOR</div><div class="row-val" style="color:var(--dim);font-style:italic">\u2014</div></div>';
+        }
+        var alvosStr = c.alvos.map(dp).join(', ') || '\u2014';
+        var invStr   = c.investigados.filter(Boolean).join(', ') || '\u2014';
+        var devStr   = c.devices.join(', ') || '\u2014';
+        var portStr  = c.portas.join(', ') || '\u2014';
+        var commonPart = c.isCommon ? '<div class="row"><div class="row-key">IPs EM COMUM</div><div class="row-val warn">' + esc(c.commonLabel) + '</div></div>' : '';
+        var invPart  = invStr !== '\u2014' ? '<div class="row"><div class="row-key">INVESTIGADO</div><div class="row-val acc">' + esc(invStr) + '</div></div>' : '';
+        var portPart = portStr !== '\u2014' ? '<div class="row"><div class="row-key">PORTA(S)</div><div class="row-val">' + esc(portStr) + '</div></div>' : '';
+        var countLbl = c.count + (c.count === 1 ? ' ocorr.' : ' ocorrs.');
+        return '<div class="card' + commonCls + '" style="animation-delay:' + delay + 's">'
+          + (c.isCommon ? '<div class="common-corner"></div>' : '')
+          + '<div class="card-head">'
+          +   '<div>'
+          +     '<div class="card-ip ' + ipCls + '">' + esc(c.ip) + '</div>'
+          +     '<div class="badge-row">' + badges + '</div>'
+          +   '</div>'
+          +   '<div style="font-family:\'Share Tech Mono\',monospace;font-size:9px;color:var(--dim);white-space:nowrap">' + countLbl + '</div>'
+          + '</div>'
+          + '<div class="card-body">'
+          +   prov
+          +   '<div class="row"><div class="row-key">ALVO(S)</div><div class="row-val hi">' + esc(alvosStr) + '</div></div>'
+          +   invPart
+          +   commonPart
+          +   '<hr class="divider">'
+          +   '<div class="row"><div class="row-key">DEVICE</div><div class="row-val">' + esc(devStr) + '</div></div>'
+          +   portPart
+          + '</div>'
+          + '<div class="card-num">INTERLOCUTOR: <b>' + dp(c.interlocutor) + '</b></div>'
+          + '</div>';
+      }).join('');
+    }
+    render();
+    document.getElementById('srch').addEventListener('input', render);
+  }
+
+  async function exportIPsZip() {
+    if (!extratoRows.length) { alert('Nenhum dado de extrato carregado.'); return; }
+
+    const btn = document.getElementById('btnExportIPs');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'AGUARDANDO PROVEDORES...';
+
+    // Aguarda até 8s para que consultas de provedor em andamento terminem
+    const waitStart = Date.now();
+    while (ipProviderActive > 0 && Date.now() - waitStart < 8000) {
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    btn.textContent = 'MONTANDO GALERIA...';
+
+    try {
+      const zip = new JSZip();
+
+      // ── Coleta todos os IPs únicos do extrato com seus metadados ──
+      const commonMap = buildCommonIPMap(extratoRows);
+
+      // Agrupa por interlocutor → ip → {dados}
+      const byNum = {};
+      extratoRows.forEach(row => {
+        const num = row.interlocutor || 'SEM_INTERLOCUTOR';
+        if (!byNum[num]) byNum[num] = { alvos: new Set(), investigados: new Set(), ips: {} };
+        byNum[num].alvos.add(row.alvo || '');
+        if (row.investigado && row.investigado !== '-') byNum[num].investigados.add(row.investigado);
+
+        if (!byNum[num].ips[row.ip]) {
+          byNum[num].ips[row.ip] = {
+            ip: row.ip,
+            count: 0,
+            tipos: new Set(),
+            devices: new Set(),
+            portas: new Set(),
+            alvos: new Set(),
+            investigados: new Set()
+          };
+        }
+        const inf = byNum[num].ips[row.ip];
+        inf.count++;
+        inf.tipos.add(row.tipo);
+        if (row.device) inf.devices.add(row.device);
+        if (row.porta)  inf.portas.add(row.porta);
+        if (row.alvo)   inf.alvos.add(row.alvo);
+        if (row.investigado && row.investigado !== '-') inf.investigados.add(row.investigado);
+      });
+
+      // Serializa para JSON seguro para embutir na galeria
+      const cards = [];
+      Object.entries(byNum).forEach(([num, dados]) => {
+        Object.values(dados.ips).forEach(inf => {
+          const cached = getProviderCache(inf.ip);
+          const common = commonMap[inf.ip];
+          cards.push({
+            interlocutor: num,
+            ip: inf.ip,
+            ipv6: isIPv6(inf.ip),
+            count: inf.count,
+            tipos: [...inf.tipos],
+            devices: [...inf.devices],
+            portas: [...inf.portas].slice(0, 4),
+            alvos: [...inf.alvos].filter(Boolean),
+            investigados: [...inf.investigados].filter(Boolean),
+            alvosCard: [...dados.alvos].filter(Boolean),
+            investigadosCard: [...dados.investigados].filter(Boolean),
+            provider: (cached && cached.provider) ? cached.provider : null,
+            providerError: (cached && cached.error) ? true : false,
+            asn: (cached && cached.asn) ? cached.asn : null,
+            isCommon: isCommonIPInfo(common),
+            commonLabel: commonIPLabel(inf.ip, commonMap)
+          });
+        });
+      });
+
+      const totalInterlocutores = Object.keys(byNum).length;
+      const totalIPs = cards.length;
+      const totalComuns = cards.filter(c => c.isCommon).length;
+      const totalComProvedor = cards.filter(c => c.provider).length;
+      const geradoEm = new Date().toLocaleString('pt-BR');
+
+      const cardsJson = JSON.stringify(cards);
+
+      // ── CSS da galeria ──
+      const css = `
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;600;700&display=swap');
+:root{
+  --bg:#050a0e;--bg2:#0a1520;--bg3:#0d1e2e;
+  --accent:#00e5ff;--green:#39ff14;--red:#ff3d71;--gold:#ffbe00;
+  --text:#c8d8e8;--dim:#4a6070;
+  --border:rgba(0,229,255,0.15);--glow:0 0 20px rgba(0,229,255,0.3);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:'Rajdhani',sans-serif;min-height:100vh;}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.05) 2px,rgba(0,0,0,0.05) 4px);pointer-events:none;z-index:999;}
+::-webkit-scrollbar{width:3px;}
+::-webkit-scrollbar-track{background:var(--bg);}
+::-webkit-scrollbar-thumb{background:rgba(0,229,255,0.15);}
+
+header{position:sticky;top:0;z-index:100;padding:14px 32px;border-bottom:1px solid var(--border);background:rgba(5,10,14,0.97);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;}
+.logo-name{font-family:'Orbitron',monospace;font-size:14px;font-weight:900;letter-spacing:4px;color:var(--accent);text-shadow:0 0 20px rgba(0,229,255,0.5);}
+.logo-sub{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);letter-spacing:2px;margin-top:2px;}
+.hstats{display:flex;gap:10px;flex-wrap:wrap;}
+.hstat{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--dim);padding:5px 10px;border:1px solid var(--border);background:rgba(0,229,255,0.02);letter-spacing:1px;}
+.hstat b{color:var(--accent);font-size:12px;}
+.meta-line{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);letter-spacing:1px;text-align:right;}
+
+.toolbar{padding:16px 24px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--border);background:rgba(5,10,14,0.6);}
+.tb{font-family:'Orbitron',monospace;font-size:8px;letter-spacing:1px;padding:7px 12px;border:1px solid var(--border);background:transparent;color:var(--dim);cursor:pointer;transition:all 0.2s;}
+.tb:hover,.tb.active{border-color:var(--accent);color:var(--accent);background:rgba(0,229,255,0.04);}
+.tb.common{border-color:rgba(255,190,0,0.4);color:var(--gold);}
+.tb.common.active{background:rgba(255,190,0,0.07);}
+.search{font-family:'Share Tech Mono',monospace;font-size:11px;padding:7px 12px;background:var(--bg2);border:1px solid var(--border);color:var(--text);outline:none;flex:1;min-width:180px;transition:border-color 0.2s;}
+.search:focus{border-color:var(--accent);}
+.search::placeholder{color:var(--dim);}
+.count-lbl{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--dim);letter-spacing:1px;white-space:nowrap;}
+.count-lbl b{color:var(--accent);}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;padding:24px;}
+.card{background:var(--bg2);border:1px solid var(--border);transition:all 0.25s;animation:fu 0.35s ease forwards;opacity:0;position:relative;}
+.card.common{border-color:rgba(255,190,0,0.45);box-shadow:0 0 18px rgba(255,190,0,0.1);}
+.card:hover{border-color:var(--accent);box-shadow:var(--glow);transform:translateY(-2px);}
+.card.common:hover{border-color:var(--gold);}
+@keyframes fu{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+
+.card-head{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:8px;}
+.card-ip{font-family:'Share Tech Mono',monospace;font-size:13px;color:var(--accent);letter-spacing:1px;word-break:break-all;}
+.card-ip.ipv6{font-size:10px;color:rgba(0,229,255,0.7);}
+.badge-row{display:flex;gap:4px;flex-wrap:wrap;margin-top:5px;}
+.badge{font-family:'Share Tech Mono',monospace;font-size:7px;letter-spacing:1px;padding:2px 5px;border:1px solid;}
+.b-alvo{color:var(--green);border-color:rgba(57,255,20,0.4);background:rgba(57,255,20,0.05);}
+.b-inter{color:#ffcc00;border-color:rgba(255,204,0,0.4);background:rgba(255,204,0,0.05);}
+.b-common{color:var(--gold);border-color:rgba(255,190,0,0.5);background:rgba(255,190,0,0.07);}
+.b-ipv6{color:rgba(0,229,255,0.6);border-color:rgba(0,229,255,0.2);}
+.common-corner{position:absolute;top:0;right:0;border-style:solid;border-width:0 22px 22px 0;border-color:transparent var(--gold) transparent transparent;}
+
+.card-body{padding:12px 14px;}
+.row{display:flex;flex-direction:column;margin-bottom:9px;}
+.row-key{font-family:'Share Tech Mono',monospace;font-size:7px;color:var(--dim);letter-spacing:2px;margin-bottom:2px;}
+.row-val{font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--text);word-break:break-all;line-height:1.5;}
+.row-val.hi{color:var(--green);}
+.row-val.acc{color:var(--accent);}
+.row-val.gold{color:var(--gold);}
+.row-val.warn{color:#ffcc00;}
+.row-val.err{color:var(--red);opacity:0.7;}
+.divider{border:none;border-top:1px solid var(--border);margin:8px 0;}
+
+.card-num{padding:10px 14px;border-top:1px solid var(--border);font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--dim);letter-spacing:1px;}
+.card-num b{color:rgba(0,229,255,0.5);}
+
+.empty{grid-column:1/-1;text-align:center;padding:80px 20px;font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:2px;line-height:2.5;}
+.empty-big{font-family:'Orbitron',monospace;font-size:11px;letter-spacing:4px;color:rgba(0,229,255,0.1);margin-bottom:12px;}
+`;
+
+      // Serializa a função de render (definida fora) injetando os dados como variável global
+      const galleryScript = 'const DATA=' + cardsJson + ';\n'
+        + '(' + _ipGalleryRender.toString() + ')();';
+
+      const galleryHtml = '<!DOCTYPE html>\n'
+        + '<html lang="pt-BR">\n'
+        + '<head>\n'
+        + '<meta charset="UTF-8">\n'
+        + '<meta name="viewport" content="width=device-width,initial-scale=1.0">\n'
+        + '<title>INTEL · IPs do Extrato</title>\n'
+        + '<style>' + css + '</style>\n'
+        + '</head>\n'
+        + '<body>\n'
+        + '<header>\n'
+        + '  <div><div class="logo-name">INTEL</div><div class="logo-sub">ANÁLISE DE IPs · EXTRATO WHATSAPP</div></div>\n'
+        + '  <div class="hstats">'
+        + '<div class="hstat">INTERLOCUTORES <b>' + totalInterlocutores + '</b></div>'
+        + '<div class="hstat">IPs ÚNICOS <b>' + totalIPs + '</b></div>'
+        + '<div class="hstat">IPs COMUNS <b>' + totalComuns + '</b></div>'
+        + '<div class="hstat">COM PROVEDOR <b>' + totalComProvedor + '</b></div>'
+        + '  </div>\n'
+        + '  <div class="meta-line">GERADO EM<br>' + geradoEm + '</div>\n'
+        + '</header>\n'
+        + '<div class="toolbar">\n'
+        + '  <input class="search" id="srch" placeholder="BUSCAR IP, PROVEDOR, ALVO, DEVICE...">\n'
+        + '  <button class="tb active" onclick="setF(\'all\',this)">TODOS</button>\n'
+        + '  <button class="tb" onclick="setF(\'alvo\',this)">● ALVO</button>\n'
+        + '  <button class="tb" onclick="setF(\'inter\',this)">● INTERLOCUT.</button>\n'
+        + '  <button class="tb common" onclick="setF(\'common\',this)">⛓ IP COMUM</button>\n'
+        + '  <button class="tb" onclick="setF(\'prov\',this)">✓ COM PROVEDOR</button>\n'
+        + '  <span class="count-lbl" id="cl"></span>\n'
+        + '</div>\n'
+        + '<div class="grid" id="grid"></div>\n'
+        + '<scr' + 'ipt>\n' + galleryScript + '\n</scr' + 'ipt>\n'
+        + '</body></html>';
+
+      zip.file('ips_extrato.html', galleryHtml);
+
+      btn.textContent = 'COMPRIMINDO...';
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `intel_ips_${Date.now()}.zip`;
+      a.click();
+
+    } catch(e) {
+      alert('Erro ao gerar ZIP de IPs: ' + e.message);
+      console.error(e);
+    }
+
+    btn.disabled = false;
+    btn.textContent = originalText;
   }
 
   async function consultarIPExtrato(ip) {
