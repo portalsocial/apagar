@@ -196,6 +196,23 @@
   .ip-card-val.highlight{color:#39ff14;}
   .ip-card-val.accent{color:var(--accent);}
   .ip-card-val.warn{color:#ffcc00;}
+
+  /* === PAINEL EXTRATO IP === */
+  .extrato-panel{padding:20px;height:100%;overflow-y:auto;box-sizing:border-box;}
+  .extrato-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:12px;}
+  .extrato-title{font-family:'Orbitron',monospace;font-size:11px;letter-spacing:3px;color:var(--accent);}
+  .extrato-close{background:transparent;border:1px solid var(--border);color:var(--dim);font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:2px;padding:6px 12px;cursor:pointer;}
+  .extrato-close:hover{border-color:var(--red);color:var(--red);}
+  .extrato-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;}
+  .extrato-card{background:var(--bg2);border:1px solid var(--border);padding:14px;}
+  .extrato-card-num{font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--accent);letter-spacing:1px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);}
+  .extrato-ip-row{display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);}
+  .extrato-ip-val{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--fg);letter-spacing:0.5px;flex:1;}
+  .extrato-ip-val.ipv6{color:rgba(0,229,255,0.6);font-size:8px;}
+  .extrato-ip-btn{font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:1px;padding:3px 8px;border:1px solid var(--border);background:transparent;color:var(--dim);cursor:pointer;white-space:nowrap;margin-left:8px;}
+  .extrato-ip-btn:hover{border-color:var(--accent);color:var(--accent);}
+  .extrato-count{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);margin-top:6px;letter-spacing:1px;}
+  .extrato-device{font-size:7px;color:var(--dim);margin-left:6px;}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -257,7 +274,11 @@
     <div class="sb-sect">
       <div class="lbl">▸ CONSULTA IP</div>
       <input class="ip-input" id="ipInput" type="text" placeholder="Ex: 138.121.119.74 ou IPv6..." />
-      <button class="btn primary" onclick="consultarIP()">⊞ CONSULTAR IP</button>
+      <button class="btn primary" onclick="consultarIP()">⊞ CONSULTAR IP MANUAL</button>
+      <hr style="border:none;border-top:1px solid var(--border);margin:10px 0">
+      <div class="lbl" style="margin-top:4px">▸ IPs DO EXTRATO</div>
+      <input type="file" id="extratoFile" accept=".xlsx,.xls" style="display:none" onchange="carregarExtrato(this)">
+      <button class="btn primary" onclick="document.getElementById('extratoFile').click()">⊞ CARREGAR PLANILHA EXTRATO</button>
     </div>
     <div class="num-list" id="numList"></div>
   </div>
@@ -271,6 +292,13 @@
       
       <button class="tb" onclick="setFilter('nophoto',this)">SEM FOTO</button>
       <button class="tb" onclick="setFilter('nowhats',this)">INATIVAS</button>
+    </div>
+    <div class="extrato-panel" id="extratoPanel" style="display:none">
+      <div class="extrato-header">
+        <span class="extrato-title" id="extratoPanelTitle">IPs DO EXTRATO</span>
+        <button class="extrato-close" onclick="fecharExtrato()">✕ FECHAR</button>
+      </div>
+      <div class="extrato-grid" id="extratoGrid"></div>
     </div>
     <div class="ip-panel" id="ipPanel" style="display:none">
       <div class="ip-panel-header">
@@ -1195,6 +1223,127 @@
     const ipInput = document.getElementById('ipInput');
     if (ipInput) ipInput.addEventListener('keydown', e => { if (e.key === 'Enter') consultarIP(); });
   });
+
+  // ======= EXTRATO IP =======
+  function extrairIP(urlOuIp) {
+    if (!urlOuIp) return null;
+    const s = String(urlOuIp);
+    // Extrai IP da URL query.milacnic.lacnic.net/search?id=IP
+    const m = s.match(/[?&]id=([^&\s]+)/);
+    if (m) return m[1].trim();
+    // Se já é um IP direto (IPv4 ou IPv6)
+    if (/^[\d.:a-fA-F]+$/.test(s.trim())) return s.trim();
+    return null;
+  }
+
+  function isIPv6(ip) {
+    return ip && ip.includes(':');
+  }
+
+  async function carregarExtrato(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    const panel     = document.getElementById('extratoPanel');
+    const grid      = document.getElementById('extratoGrid');
+    const title     = document.getElementById('extratoPanelTitle');
+    const mainGrid  = document.getElementById('grid');
+    const ipPanel   = document.getElementById('ipPanel');
+
+    // Esconde outros painéis
+    mainGrid.style.display = 'none';
+    ipPanel.style.display  = 'none';
+    panel.style.display    = 'block';
+    title.textContent      = `CARREGANDO — ${file.name}`;
+    grid.innerHTML         = '<div class="ip-loading" style="padding:20px">PROCESSANDO PLANILHA...</div>';
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const wb     = XLSX.read(buffer, { type: 'arraybuffer' });
+      const ws     = wb.Sheets[wb.SheetNames[0]];
+      const rows   = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+      // Agrupa IPs únicos por interlocutor
+      const porInterlocutor = {};
+
+      rows.forEach(row => {
+        const interlocutor = String(row['Interlocutor'] || '').trim();
+        const ipRaw        = String(row['IP do Remetente'] || '').trim();
+        const device       = String(row['Device Remetente'] || '').trim();
+        const sentido      = String(row['Sentido'] || '').trim();
+        const ip           = extrairIP(ipRaw);
+
+        if (!interlocutor || !ip) return;
+
+        if (!porInterlocutor[interlocutor]) {
+          porInterlocutor[interlocutor] = {};
+        }
+
+        if (!porInterlocutor[interlocutor][ip]) {
+          porInterlocutor[interlocutor][ip] = { count: 0, devices: new Set(), sentidos: new Set() };
+        }
+
+        porInterlocutor[interlocutor][ip].count++;
+        if (device) porInterlocutor[interlocutor][ip].devices.add(device);
+        if (sentido) porInterlocutor[interlocutor][ip].sentidos.add(sentido);
+      });
+
+      const interlocutores = Object.keys(porInterlocutor).sort();
+      title.textContent = `IPs DO EXTRATO — ${interlocutores.length} interlocutores`;
+
+      let html = '';
+      interlocutores.forEach(num => {
+        const ips = porInterlocutor[num];
+        const ipList = Object.entries(ips)
+          .sort((a, b) => b[1].count - a[1].count);
+
+        let ipRows = '';
+        ipList.forEach(([ip, info]) => {
+          const cls    = isIPv6(ip) ? 'ipv6' : '';
+          const devs   = [...info.devices].join(', ');
+          const label  = isIPv6(ip) ? 'IPv6' : 'IPv4';
+          ipRows += `
+            <div class="extrato-ip-row">
+              <div>
+                <div class="extrato-ip-val ${cls}">${ip}</div>
+                <div style="font-family:'Share Tech Mono',monospace;font-size:7px;color:var(--dim);margin-top:2px">${label}${devs ? ' · ' + devs : ''} · ${info.count}x</div>
+              </div>
+              <button class="extrato-ip-btn" onclick="consultarIPExtrato('${ip.replace(/'/g,"\'")}')">⊞ CONSULTAR</button>
+            </div>`;
+        });
+
+        html += `
+          <div class="extrato-card">
+            <div class="extrato-card-num">+${num}</div>
+            ${ipRows}
+            <div class="extrato-count">${ipList.length} IP(s) único(s)</div>
+          </div>`;
+      });
+
+      grid.innerHTML = html || '<div class="ip-loading" style="padding:20px">NENHUM IP ENCONTRADO</div>';
+
+    } catch(e) {
+      grid.innerHTML = `<div class="ip-error" style="padding:20px">ERRO AO LER PLANILHA: ${e.message}</div>`;
+    }
+
+    // Limpa o input para permitir recarregar o mesmo arquivo
+    input.value = '';
+  }
+
+  async function consultarIPExtrato(ip) {
+    document.getElementById('ipInput').value = ip;
+    // Esconde extrato, mostra painel IP
+    document.getElementById('extratoPanel').style.display = 'none';
+    await consultarIP();
+    // Ao fechar o painel IP, volta ao extrato
+    document.getElementById('ipPanel').querySelector('.ip-panel-close')
+      .setAttribute('onclick', "document.getElementById('ipPanel').style.display='none';document.getElementById('extratoPanel').style.display='block';");
+  }
+
+  function fecharExtrato() {
+    document.getElementById('extratoPanel').style.display = 'none';
+    document.getElementById('grid').style.display = '';
+  }
 </script>
 </body>
 </html>
