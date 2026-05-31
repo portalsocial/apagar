@@ -4,6 +4,10 @@ const path = require('path');
 const pino = require('pino');
 const fs = require('fs');
 const net = require('net');
+const dns = require('dns');
+
+// Evita timeout quando o servidor tem DNS/IPv6 instável: Node pode tentar AAAA primeiro.
+try { dns.setDefaultResultOrder('ipv4first'); } catch (_) {}
 
 // Captura erros globais para evitar que o servidor encerre
 process.on('uncaughtException', (err) => {
@@ -459,17 +463,62 @@ function rdapIpPath(ip) {
   return String(ip || '').trim();
 }
 
-async function fetchJsonWithTimeout(url, timeoutMs = 12000) {
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = 18000) {
   const controller = new AbortController();
+  const started = Date.now();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
     const r = await fetch(url, {
-      headers: { Accept: 'application/rdap+json, application/json' },
+      headers: {
+        Accept: 'application/rdap+json, application/json',
+        'User-Agent': 'INTEL-RDAP/1.0'
+      },
       redirect: 'follow',
       signal: controller.signal,
     });
-    if (!r.ok) return { ok: false, status: r.status, url };
-    return { ok: true, data: await r.json(), url };
+
+    const ms = Date.now() - started;
+    const text = await r.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch (_) {}
+
+    if (!r.ok) {
+      return {
+        ok: false,
+        status: r.status,
+        url,
+        ms,
+        error: `HTTP ${r.status}`,
+        body: text ? text.slice(0, 180) : ''
+      };
+    }
+
+    if (!data) {
+      return {
+        ok: false,
+        status: r.status,
+        url,
+        ms,
+        error: 'resposta RDAP não veio em JSON',
+        body: text ? text.slice(0, 180) : ''
+      };
+    }
+
+    return { ok: true, status: r.status, data, url, ms };
+  } catch (e) {
+    const ms = Date.now() - started;
+    return {
+      ok: false,
+      url,
+      ms,
+      error: e.name === 'AbortError' ? 'timeout' : (e.message || String(e)),
+      code: e.code || e.cause?.code || null
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -511,18 +560,43 @@ function rdapEndpoints(ip) {
   ];
 }
 
-// Consulta em ordem de prioridade, sem corrida paralela.
-// A corrida fazia outro RDAP responder antes do registro.br e podia devolver dados incompletos.
+function tentativaResumo(r) {
+  return {
+    url: r.url,
+    host: (() => { try { return new URL(r.url).hostname; } catch (_) { return ''; } })(),
+    ok: !!r.ok,
+    status: r.status || null,
+    ms: r.ms || null,
+    error: r.error || null,
+    code: r.code || null
+  };
+}
+
+function isTransientRdapError(r) {
+  const msg = String(r?.error || '').toLowerCase();
+  const code = String(r?.code || '').toLowerCase();
+  return msg.includes('timeout') || msg.includes('fetch failed') ||
+    msg.includes('network') || msg.includes('socket') ||
+    ['econnreset', 'etimedout', 'eai_again', 'enotfound', 'und_err_connect_timeout'].includes(code);
+}
+
+// Consulta em ordem de prioridade, com uma nova tentativa curta para falhas transitórias.
+// Mantém registro.br antes dos demais para IPs brasileiros e registra todas as tentativas.
 async function queryRdapWithRace(endpoints) {
   const attempts = [];
 
   for (const url of endpoints || []) {
-    try {
-      const r = await fetchJsonWithTimeout(url);
-      attempts.push({ url, ok: !!r.ok, status: r.status || 200 });
+    let r = await fetchJsonWithTimeout(url);
+    attempts.push(tentativaResumo(r));
+    if (r.ok && r.data) return { ...r, attempts };
+
+    // Uma única repetição por endpoint quando o erro for de rede/timeout.
+    // Isso evita falso negativo sem transformar a consulta em rajada.
+    if (isTransientRdapError(r)) {
+      await delay(900);
+      r = await fetchJsonWithTimeout(url, 22000);
+      attempts.push({ ...tentativaResumo(r), retry: true });
       if (r.ok && r.data) return { ...r, attempts };
-    } catch (e) {
-      attempts.push({ url, ok: false, error: e.name === 'AbortError' ? 'timeout' : e.message });
     }
   }
 
@@ -646,7 +720,7 @@ function parseRdapResult(data, ip, fonte) {
   };
 }
 
-async function consultarIpRdap(rawInput) {
+async function consultarIpRdap(rawInput, opts = {}) {
   const ip = normalizarIP(rawInput);
   if (!ip) return { ok: false, error: 'IP obrigatório' };
 
@@ -654,17 +728,22 @@ async function consultarIpRdap(rawInput) {
     return { ok: false, error: `IP inválido após normalização: ${ip}` };
   }
 
-  if (ipCache[ip]?.ok) return ipCache[ip];
+  if (!opts.nocache && ipCache[ip]?.ok) return { ...ipCache[ip], cached: true };
 
   const endpoints = rdapEndpoints(ip);
   const rdapResult = await queryRdapWithRace(endpoints);
 
   if (!rdapResult || !rdapResult.ok) {
     console.warn('[INTEL] RDAP não localizou IP:', ip, rdapResult?.attempts || []);
+    const attempts = rdapResult?.attempts || [];
+    const transient = attempts.some(a => a.error && !String(a.error).startsWith('HTTP 4'));
     return {
       ok: false,
-      error: 'IP não encontrado nos servidores RDAP consultados no momento',
-      attempts: rdapResult?.attempts || []
+      temporary: transient,
+      error: transient
+        ? 'Falha temporária ao consultar RDAP a partir do servidor'
+        : 'IP não encontrado nos servidores RDAP consultados',
+      attempts
     };
   }
 
@@ -681,11 +760,29 @@ async function consultarIpRdap(rawInput) {
 // Nova rota preferencial: evita problemas de IPv6 em parâmetro de caminho.
 app.get('/api/ip', async (req, res) => {
   try {
-    const resposta = await consultarIpRdap(req.query.id || req.query.ip || '');
-    res.status(resposta.ok ? 200 : 200).json(resposta);
+    const resposta = await consultarIpRdap(req.query.id || req.query.ip || '', {
+      nocache: String(req.query.nocache || '') === '1'
+    });
+    res.status(200).json(resposta);
   } catch(e) {
     console.error('[INTEL] Erro consulta IP:', e.message);
-    res.json({ ok: false, error: e.message });
+    res.json({ ok: false, temporary: true, error: e.message });
+  }
+});
+
+// Diagnóstico cru: use quando aparecer “falha temporária” para ver status/timeout por endpoint.
+app.get('/api/ip/debug', async (req, res) => {
+  try {
+    const raw = req.query.id || req.query.ip || '';
+    const ip = normalizarIP(raw);
+    if (!ip) return res.json({ ok: false, error: 'IP obrigatório' });
+    if (!net.isIP(ip)) return res.json({ ok: false, error: `IP inválido após normalização: ${ip}` });
+    const endpoints = rdapEndpoints(ip);
+    const rdapResult = await queryRdapWithRace(endpoints);
+    res.json({ ok: !!rdapResult?.ok, ip, endpoints, attempts: rdapResult?.attempts || [], result: rdapResult?.ok ? parseRdapResult(rdapResult.data, ip, rdapResult.url) : null });
+  } catch(e) {
+    console.error('[INTEL] Erro diagnóstico IP:', e.message);
+    res.json({ ok: false, temporary: true, error: e.message });
   }
 });
 
