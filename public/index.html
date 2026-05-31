@@ -1125,14 +1125,14 @@
     grid.style.display = 'none';
     panel.style.display = 'block';
     title.textContent = `CONSULTANDO — ${ip}`;
-    body.innerHTML = '<div style="font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:2px;padding:20px;animation:blink 1s infinite">CONSULTANDO REGISTROS...</div>';
+    body.innerHTML = '<div class="ip-loading" style="padding:20px">CONSULTANDO REGISTROS...</div>';
 
     try {
       const res = await fetch(`/api/ip/${encodeURIComponent(ip)}`);
       const data = await res.json();
 
       if (!data.ok) {
-        body.innerHTML = `<div style="color:var(--red);font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:2px;padding:20px">ERRO: ${data.error || 'IP não encontrado'}</div>`;
+        body.innerHTML = `<div class="ip-error" style="padding:20px">ERRO: ${data.error || 'IP não encontrado'}</div>`;
         title.textContent = `ERRO — ${ip}`;
         return;
       }
@@ -1175,10 +1175,10 @@
         if (cc) cards += card(`CONTATO — ${c.id || ''}`, cc);
       });
 
-      body.innerHTML = cards || '<div style="color:var(--dim);font-family:'Share Tech Mono',monospace;font-size:10px;padding:20px">NENHUM DADO RETORNADO</div>';
+      body.innerHTML = cards || '<div class="ip-loading" style="padding:20px">NENHUM DADO RETORNADO</div>';
 
     } catch(e) {
-      body.innerHTML = `<div style="color:var(--red);font-family:'Share Tech Mono',monospace;font-size:10px;padding:20px">ERRO: ${e.message}</div>`;
+      body.innerHTML = `<div class="ip-error" style="padding:20px">ERRO: ${e.message}</div>`;
     }
   }
 
