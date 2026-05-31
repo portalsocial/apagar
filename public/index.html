@@ -1315,9 +1315,9 @@
 
   // Cache local para evitar consultar o mesmo IP repetidas vezes.
   // A consulta de provedor é feita em fila, com baixa concorrência, para não travar o painel.
-  const IP_PROVIDER_CACHE_KEY = 'intel_ip_provider_cache_v3';
-  const IP_PROVIDER_OLD_CACHE_KEYS = ['intel_ip_provider_cache_v1', 'intel_ip_provider_cache_v2'];
-  const IP_PROVIDER_CONCURRENCY = 2;
+  const IP_PROVIDER_CACHE_KEY = 'intel_ip_provider_cache_v4';
+  const IP_PROVIDER_OLD_CACHE_KEYS = ['intel_ip_provider_cache_v1', 'intel_ip_provider_cache_v2', 'intel_ip_provider_cache_v3'];
+  const IP_PROVIDER_CONCURRENCY = 1;
   let ipProviderCache = {};
   let ipProviderQueue = [];
   let ipProviderQueued = new Set();
@@ -1401,11 +1401,15 @@
     const cached = ipProviderCache[ip];
     if (!cached) return null;
 
-    // Não deixa erro virar estado permanente. Erro de RDAP pode ser timeout, cache velho, rate limit ou falha de rede.
+    // Falha temporária não pode virar “não localizado”, mas também não pode ficar consultando em loop.
+    // Mantém um cooldown curto e depois permite nova tentativa.
     if (cached.error) {
-      delete ipProviderCache[ip];
-      saveIPProviderCache();
-      return null;
+      const retryAt = cached.retryAt || 0;
+      if (Date.now() >= retryAt) {
+        delete ipProviderCache[ip];
+        saveIPProviderCache();
+        return null;
+      }
     }
 
     return cached;
@@ -1429,6 +1433,11 @@
     if (cached && cached.provider) {
       const asn = cached.asn ? ` <small>· ${htmlSafe(cached.asn)}</small>` : '';
       return `<div class="extrato-provider" id="${id}">PROVEDOR: <b>${htmlSafe(cached.provider)}</b>${asn}</div>`;
+    }
+
+    if (cached && cached.error) {
+      const msg = cached.message ? ` <small>· ${htmlSafe(cached.message)}</small>` : '';
+      return `<div class="extrato-provider error" id="${id}">PROVEDOR: falha temporária${msg}</div>`;
     }
 
     return `<div class="extrato-provider loading" id="${id}">PROVEDOR: aguardando consulta</div>`;
@@ -1464,9 +1473,19 @@
         ipProviderActive--;
         ipProviderQueued.delete(ip);
         // Pausa maior para reduzir falso negativo por sobrecarga/rate limit do RDAP em consultas grandes.
-        setTimeout(processProviderQueue, 700);
+        setTimeout(processProviderQueue, 1500);
       });
     }
+  }
+
+  function formatRdapAttempts(data) {
+    const attempts = Array.isArray(data?.attempts) ? data.attempts : [];
+    if (!attempts.length) return data?.error || 'falha temporária';
+    const compact = attempts.slice(0, 3).map(a => {
+      const host = a.host || (() => { try { return new URL(a.url).hostname; } catch(e) { return 'rdap'; } })();
+      return `${host}: ${a.ok ? 'ok' : (a.status || a.code || a.error || 'falha')}`;
+    }).join(' | ');
+    return compact || data?.error || 'falha temporária';
   }
 
   async function fetchProviderForIP(ip) {
@@ -1476,7 +1495,7 @@
       const res = await fetch(`/api/ip?id=${encodeURIComponent(ip)}`);
       const data = await res.json();
 
-      if (!data.ok) throw new Error(data.error || 'IP não localizado');
+      if (!data.ok) throw new Error(formatRdapAttempts(data));
 
       const info = extractProviderInfo(data);
       if (!info.provider && !info.asn) throw new Error('Retorno sem titular/ASN');
@@ -1495,13 +1514,20 @@
         renderExtrato();
       }
     } catch(e) {
-      // Não grava cache negativo. Caso contrário, timeout momentâneo vira “não localizado” fixo.
-      delete ipProviderCache[ip];
+      // Não classifica como “não localizado”. Guarda cooldown para não bombardear o RDAP nem entrar em loop.
+      const msg = String(e.message || 'falha temporária').slice(0, 220);
+      ipProviderCache[ip] = {
+        error: true,
+        temporary: true,
+        message: msg,
+        ts: Date.now(),
+        retryAt: Date.now() + (15 * 60 * 1000)
+      };
       saveIPProviderCache();
-      const msg = htmlSafe(e.message || 'falha temporária');
+
       const el = document.getElementById(ipProviderDomId(ip));
       if (el) {
-        updateProviderLine(ip, `PROVEDOR: falha temporária <small>${msg}</small>`, 'error');
+        updateProviderLine(ip, `PROVEDOR: falha temporária <small>${htmlSafe(msg)}</small>`, 'error');
       } else if (document.getElementById('extratoPanel').style.display !== 'none') {
         renderExtrato();
       }
