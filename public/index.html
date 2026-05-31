@@ -1432,7 +1432,14 @@
 
   function scheduleProviderLookup(ips) {
     (ips || []).forEach(ip => {
-      if (!ip || getProviderCache(ip) || ipProviderQueued.has(ip)) return;
+      if (!ip) return;
+      if (getProviderCache(ip)) return;
+      // Se estava marcado como agendado mas não está mais na fila nem em execução
+      // (o DOM foi reconstruído por um re-render), limpa o marcador.
+      if (ipProviderQueued.has(ip) && !ipProviderQueue.includes(ip) && ipProviderActive === 0) {
+        ipProviderQueued.delete(ip);
+      }
+      if (ipProviderQueued.has(ip)) return;
       ipProviderQueued.add(ip);
       ipProviderQueue.push(ip);
     });
@@ -1468,11 +1475,24 @@
         ts: Date.now()
       };
       saveIPProviderCache();
-      updateProviderLine(ip);
+
+      // Tenta atualizar inline; se o elemento sumiu (DOM reconstruído por filtro),
+      // redesenha o extrato inteiro com o cache já preenchido.
+      const el = document.getElementById(ipProviderDomId(ip));
+      if (el) {
+        updateProviderLine(ip);
+      } else if (document.getElementById('extratoPanel').style.display !== 'none') {
+        renderExtrato();
+      }
     } catch(e) {
       ipProviderCache[ip] = { error: true, message: e.message, ts: Date.now() };
       saveIPProviderCache();
-      updateProviderLine(ip, 'PROVEDOR: não localizado', 'error');
+      const el = document.getElementById(ipProviderDomId(ip));
+      if (el) {
+        updateProviderLine(ip, 'PROVEDOR: não localizado', 'error');
+      } else if (document.getElementById('extratoPanel').style.display !== 'none') {
+        renderExtrato();
+      }
     }
   }
 
