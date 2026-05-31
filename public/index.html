@@ -168,6 +168,19 @@
   .import-count{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);margin-top:5px;letter-spacing:1px;}
   .import-count b{color:var(--accent);}
   .import-count span.warn{color:#ffbe00;}
+
+  /* === CONSULTA IP === */
+  .ip-input{width:100%;background:transparent;border:1px solid var(--border);color:var(--fg);font-family:'Share Tech Mono',monospace;font-size:11px;padding:8px;box-sizing:border-box;letter-spacing:1px;margin-top:4px;}
+  .ip-input:focus{outline:none;border-color:var(--accent);box-shadow:var(--glow);}
+  .ip-result{margin-top:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--dim);line-height:1.8;}
+  .ip-row{display:flex;gap:6px;margin-bottom:2px;}
+  .ip-key{color:var(--accent);min-width:110px;letter-spacing:1px;font-size:8px;}
+  .ip-val{color:var(--fg);word-break:break-all;}
+  .ip-sep{border:none;border-top:1px solid var(--border);margin:8px 0;}
+  .ip-section-title{color:var(--accent);font-size:8px;letter-spacing:2px;margin:8px 0 4px;}
+  .ip-loading{color:var(--dim);font-size:9px;letter-spacing:2px;animation:blink 1s infinite;}
+  .ip-error{color:var(--red);font-size:9px;letter-spacing:1px;}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -224,6 +237,13 @@
       <button class="btn" onclick="exportReport()">⬇ EXPORTAR RELATÓRIO .TXT</button>
       <button class="btn primary" id="btnExportImg" onclick="exportImages()">⬇ EXPORTAR IMAGENS .ZIP</button>
       <button class="btn danger" onclick="clearAll()">✕ LIMPAR TUDO</button>
+    </div>
+
+    <div class="sb-sect">
+      <div class="lbl">▸ CONSULTA IP</div>
+      <input class="ip-input" id="ipInput" type="text" placeholder="Ex: 138.121.119.74 ou IPv6..." />
+      <button class="btn primary" onclick="consultarIP()">⊞ CONSULTAR IP</button>
+      <div class="ip-result" id="ipResult"></div>
     </div>
     <div class="num-list" id="numList"></div>
   </div>
@@ -637,9 +657,6 @@
     const decoder = new TextDecoder();
     let buf = '';
 
-    let lastRender = 0;
-    const RENDER_INTERVAL = 150; // ms
-
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -667,21 +684,9 @@
         const pct = Math.round((data.progress / data.total) * 100);
         document.getElementById('progFill').style.width = pct + '%';
         document.getElementById('progTxt').textContent = `${data.progress} / ${data.total} — ${data.found ? '✓ foto' : '✗ sem foto'}`;
-        
-        // Throttle: atualiza interface só a cada RENDER_INTERVAL ms ou no último
-        const now = Date.now();
-        if (now - lastRender >= RENDER_INTERVAL || data.progress === data.total) {
-          renderSideList();
-          renderGrid();
-          updateStats();
-          lastRender = now;
-        }
+        renderSideList(); renderGrid(); updateStats();
       }
     }
-    // Garante renderização final
-    renderSideList();
-    renderGrid();
-    updateStats();
     isBusy = false;
     document.getElementById('btnBuscar').disabled = false;
   }
@@ -983,7 +988,7 @@
   .empty{grid-column:1/-1;text-align:center;padding:60px 20px;font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:2px;}
   ::-webkit-scrollbar{width:3px;}
   ::-webkit-scrollbar-track{background:var(--bg);}
-  ::-webkit-scrollbar-thumb{background:rgba(0,229,255,0.15);border-radius:2px;}`;
+  ::-webkit-scrollbar-thumb{background:rgba(0,229,255,0.15);}`;
 
       const now = new Date().toLocaleString('pt-BR');
       const statTotal    = profiles.length;
@@ -1085,6 +1090,71 @@
   // ── INIT ─────────────────────────────────────────
   pollStatus();
   setInterval(pollStatus, 2000);
+
+  async function consultarIP() {
+    const ip = document.getElementById('ipInput').value.trim();
+    const resultEl = document.getElementById('ipResult');
+    if (!ip) { resultEl.innerHTML = '<div class="ip-error">Digite um IP válido.</div>'; return; }
+
+    resultEl.innerHTML = '<div class="ip-loading">CONSULTANDO...</div>';
+
+    try {
+      const res = await fetch(`/api/ip/${encodeURIComponent(ip)}`);
+      const data = await res.json();
+
+      if (!data.ok) {
+        resultEl.innerHTML = `<div class="ip-error">Erro: ${data.error || 'IP não encontrado'}</div>`;
+        return;
+      }
+
+      const d = data.result;
+      let html = '';
+
+      // Informações principais
+      if (d.asn)         html += `<div class="ip-row"><span class="ip-key">ASN</span><span class="ip-val">${d.asn}</span></div>`;
+      if (d.titular)     html += `<div class="ip-row"><span class="ip-key">TITULAR</span><span class="ip-val">${d.titular}</span></div>`;
+      if (d.documento)   html += `<div class="ip-row"><span class="ip-key">DOCUMENTO</span><span class="ip-val">${d.documento}</span></div>`;
+      if (d.responsavel) html += `<div class="ip-row"><span class="ip-key">RESPONSÁVEL</span><span class="ip-val">${d.responsavel}</span></div>`;
+      if (d.pais)        html += `<div class="ip-row"><span class="ip-key">PAÍS</span><span class="ip-val">${d.pais}</span></div>`;
+      if (d.criado)      html += `<div class="ip-row"><span class="ip-key">CRIADO</span><span class="ip-val">${d.criado}</span></div>`;
+      if (d.alterado)    html += `<div class="ip-row"><span class="ip-key">ALTERADO</span><span class="ip-val">${d.alterado}</span></div>`;
+
+      // Delegações
+      if (d.delegacoes && d.delegacoes.length > 0) {
+        html += '<hr class="ip-sep"><div class="ip-section-title">DELEGAÇÕES</div>';
+        d.delegacoes.forEach(del => {
+          html += `<div class="ip-row"><span class="ip-key">BLOCO</span><span class="ip-val">${del.bloco}</span></div>`;
+          if (del.dns && del.dns.length > 0) {
+            del.dns.forEach(ns => {
+              html += `<div class="ip-row"><span class="ip-key">DNS</span><span class="ip-val">${ns}</span></div>`;
+            });
+          }
+        });
+      }
+
+      // Contatos
+      if (d.contatos && d.contatos.length > 0) {
+        d.contatos.forEach(c => {
+          html += `<hr class="ip-sep"><div class="ip-section-title">CONTATO (${c.id || ''})</div>`;
+          if (c.nome)  html += `<div class="ip-row"><span class="ip-key">NOME</span><span class="ip-val">${c.nome}</span></div>`;
+          if (c.email) html += `<div class="ip-row"><span class="ip-key">EMAIL</span><span class="ip-val">${c.email}</span></div>`;
+          if (c.pais)  html += `<div class="ip-row"><span class="ip-key">PAÍS</span><span class="ip-val">${c.pais}</span></div>`;
+          if (c.criado) html += `<div class="ip-row"><span class="ip-key">CRIADO</span><span class="ip-val">${c.criado}</span></div>`;
+          if (c.alterado) html += `<div class="ip-row"><span class="ip-key">ALTERADO</span><span class="ip-val">${c.alterado}</span></div>`;
+        });
+      }
+
+      resultEl.innerHTML = html || '<div class="ip-error">Nenhum dado retornado.</div>';
+    } catch(e) {
+      resultEl.innerHTML = `<div class="ip-error">Erro na consulta: ${e.message}</div>`;
+    }
+  }
+
+  // Permite pressionar Enter no campo IP
+  document.addEventListener('DOMContentLoaded', () => {
+    const ipInput = document.getElementById('ipInput');
+    if (ipInput) ipInput.addEventListener('keydown', e => { if (e.key === 'Enter') consultarIP(); });
+  });
 </script>
 </body>
 </html>
