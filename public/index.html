@@ -213,6 +213,22 @@
   .extrato-ip-btn:hover{border-color:var(--accent);color:var(--accent);}
   .extrato-count{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);margin-top:6px;letter-spacing:1px;}
   .extrato-device{font-size:7px;color:var(--dim);margin-left:6px;}
+
+  .extrato-filters{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center;}
+  .extrato-filter-btn{font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:2px;padding:6px 12px;border:1px solid var(--border);background:transparent;color:var(--dim);cursor:pointer;}
+  .extrato-filter-btn:hover{border-color:var(--accent);color:var(--accent);}
+  .extrato-filter-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(0,229,255,0.07);}
+  .extrato-filter-btn.alvo{border-color:rgba(57,255,20,0.4);color:#39ff14;}
+  .extrato-filter-btn.alvo.active{background:rgba(57,255,20,0.07);}
+  .extrato-filter-btn.interlocutor{border-color:rgba(255,204,0,0.4);color:#ffcc00;}
+  .extrato-filter-btn.interlocutor.active{background:rgba(255,204,0,0.07);}
+  .extrato-search-ip{background:transparent;border:1px solid var(--border);color:var(--fg);font-family:'Share Tech Mono',monospace;font-size:10px;padding:6px 10px;flex:1;min-width:140px;outline:none;}
+  .extrato-search-ip:focus{border-color:var(--accent);}
+  .extrato-select{background:var(--bg2);border:1px solid var(--border);color:var(--fg);font-family:'Share Tech Mono',monospace;font-size:9px;padding:6px 10px;cursor:pointer;outline:none;letter-spacing:1px;}
+  .extrato-select:focus{border-color:var(--accent);}
+  .extrato-tag-alvo{font-size:7px;padding:1px 5px;background:rgba(57,255,20,0.1);color:#39ff14;border:1px solid rgba(57,255,20,0.3);margin-left:4px;}
+  .extrato-tag-interlocutor{font-size:7px;padding:1px 5px;background:rgba(255,204,0,0.1);color:#ffcc00;border:1px solid rgba(255,204,0,0.3);margin-left:4px;}
+  .extrato-stats{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);letter-spacing:1px;padding:8px 0;border-bottom:1px solid var(--border);margin-bottom:12px;}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -298,6 +314,16 @@
         <span class="extrato-title" id="extratoPanelTitle">IPs DO EXTRATO</span>
         <button class="extrato-close" onclick="fecharExtrato()">✕ FECHAR</button>
       </div>
+      <div class="extrato-filters">
+        <button class="extrato-filter-btn active" onclick="setExtratoFiltro('todos',this)">TODOS</button>
+        <button class="extrato-filter-btn alvo" onclick="setExtratoFiltro('alvo',this)">● ALVO</button>
+        <button class="extrato-filter-btn interlocutor" onclick="setExtratoFiltro('interlocutor',this)">● INTERLOCUTOR</button>
+        <select class="extrato-select" id="extratoSelectNum" onchange="setExtratoNumero(this.value)">
+          <option value="">TODOS OS NÚMEROS</option>
+        </select>
+        <input class="extrato-search-ip" id="extratoSearchIP" placeholder="BUSCAR IP..." oninput="renderExtrato()">
+      </div>
+      <div class="extrato-stats" id="extratoStats"></div>
       <div class="extrato-grid" id="extratoGrid"></div>
     </div>
     <div class="ip-panel" id="ipPanel" style="display:none">
@@ -1225,13 +1251,15 @@
   });
 
   // ======= EXTRATO IP =======
+  let extratoData = {}; // { interlocutor: { alvo: {ip: info}, interlocutor: {ip: info} } }
+  let extratoFiltro = 'todos';
+  let extratoNumero = '';
+
   function extrairIP(urlOuIp) {
     if (!urlOuIp) return null;
     const s = String(urlOuIp);
-    // Extrai IP da URL query.milacnic.lacnic.net/search?id=IP
     const m = s.match(/[?&]id=([^&\s]+)/);
     if (m) return m[1].trim();
-    // Se já é um IP direto (IPv4 ou IPv6)
     if (/^[\d.:a-fA-F]+$/.test(s.trim())) return s.trim();
     return null;
   }
@@ -1240,17 +1268,117 @@
     return ip && ip.includes(':');
   }
 
+  function setExtratoFiltro(filtro, btn) {
+    extratoFiltro = filtro;
+    document.querySelectorAll('.extrato-filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderExtrato();
+  }
+
+  function setExtratoNumero(val) {
+    extratoNumero = val;
+    renderExtrato();
+  }
+
+  function renderExtrato() {
+    const grid      = document.getElementById('extratoGrid');
+    const stats     = document.getElementById('extratoStats');
+    const searchVal = (document.getElementById('extratoSearchIP')?.value || '').toLowerCase();
+
+    const numeros = extratoNumero
+      ? [extratoNumero]
+      : Object.keys(extratoData).sort();
+
+    let totalCards = 0;
+    let totalIPs   = 0;
+    let html = '';
+
+    numeros.forEach(num => {
+      const dados = extratoData[num];
+      // Decide quais IPs mostrar baseado no filtro
+      let ipsParaMostrar = {};
+
+      if (extratoFiltro === 'todos') {
+        // Merge de alvo e interlocutor
+        Object.entries(dados.alvo || {}).forEach(([ip, info]) => {
+          if (!ipsParaMostrar[ip]) ipsParaMostrar[ip] = { count:0, devices:new Set(), tipo:new Set() };
+          ipsParaMostrar[ip].count += info.count;
+          info.devices.forEach(d => ipsParaMostrar[ip].devices.add(d));
+          ipsParaMostrar[ip].tipo.add('alvo');
+        });
+        Object.entries(dados.interlocutor || {}).forEach(([ip, info]) => {
+          if (!ipsParaMostrar[ip]) ipsParaMostrar[ip] = { count:0, devices:new Set(), tipo:new Set() };
+          ipsParaMostrar[ip].count += info.count;
+          info.devices.forEach(d => ipsParaMostrar[ip].devices.add(d));
+          ipsParaMostrar[ip].tipo.add('interlocutor');
+        });
+      } else {
+        Object.entries(dados[extratoFiltro] || {}).forEach(([ip, info]) => {
+          ipsParaMostrar[ip] = { ...info, tipo: new Set([extratoFiltro]) };
+        });
+      }
+
+      // Filtro de busca por IP
+      if (searchVal) {
+        ipsParaMostrar = Object.fromEntries(
+          Object.entries(ipsParaMostrar).filter(([ip]) => ip.toLowerCase().includes(searchVal))
+        );
+      }
+
+      if (Object.keys(ipsParaMostrar).length === 0) return;
+
+      const ipList = Object.entries(ipsParaMostrar).sort((a,b) => b[1].count - a[1].count);
+      totalCards++;
+      totalIPs += ipList.length;
+
+      let ipRows = '';
+      ipList.forEach(([ip, info]) => {
+        const cls   = isIPv6(ip) ? 'ipv6' : '';
+        const devs  = [...(info.devices || new Set())].join(', ');
+        const label = isIPv6(ip) ? 'IPv6' : 'IPv4';
+        const tipos = [...(info.tipo || new Set())];
+        const tagHTML = tipos.map(t =>
+          t === 'alvo'
+            ? '<span class="extrato-tag-alvo">ALVO</span>'
+            : '<span class="extrato-tag-interlocutor">INTERLOCUT.</span>'
+        ).join('');
+
+        ipRows += `
+          <div class="extrato-ip-row">
+            <div style="flex:1">
+              <div style="display:flex;align-items:center;gap:4px">
+                <div class="extrato-ip-val ${cls}">${ip}</div>
+                ${tagHTML}
+              </div>
+              <div style="font-family:'Share Tech Mono',monospace;font-size:7px;color:var(--dim);margin-top:2px">${label}${devs ? ' · ' + devs : ''} · ${info.count}x</div>
+            </div>
+            <button class="extrato-ip-btn" onclick="consultarIPExtrato('${ip.replace(/'/g,"\'")}')">⊞ CONSULTAR</button>
+          </div>`;
+      });
+
+      html += `
+        <div class="extrato-card">
+          <div class="extrato-card-num">+${num}</div>
+          ${ipRows}
+          <div class="extrato-count">${ipList.length} IP(s) único(s)</div>
+        </div>`;
+    });
+
+    grid.innerHTML  = html || '<div class="ip-loading" style="padding:20px">NENHUM IP ENCONTRADO</div>';
+    stats.textContent = `${totalCards} número(s) · ${totalIPs} IP(s) único(s) exibidos`;
+  }
+
   async function carregarExtrato(input) {
     const file = input.files[0];
     if (!file) return;
 
-    const panel     = document.getElementById('extratoPanel');
-    const grid      = document.getElementById('extratoGrid');
-    const title     = document.getElementById('extratoPanelTitle');
-    const mainGrid  = document.getElementById('grid');
-    const ipPanel   = document.getElementById('ipPanel');
+    const panel    = document.getElementById('extratoPanel');
+    const grid     = document.getElementById('extratoGrid');
+    const title    = document.getElementById('extratoPanelTitle');
+    const mainGrid = document.getElementById('grid');
+    const ipPanel  = document.getElementById('ipPanel');
+    const selNum   = document.getElementById('extratoSelectNum');
 
-    // Esconde outros painéis
     mainGrid.style.display = 'none';
     ipPanel.style.display  = 'none';
     panel.style.display    = 'block';
@@ -1263,70 +1391,54 @@
       const ws     = wb.Sheets[wb.SheetNames[0]];
       const rows   = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
-      // Agrupa IPs únicos por interlocutor
-      const porInterlocutor = {};
+      extratoData = {};
 
       rows.forEach(row => {
         const interlocutor = String(row['Interlocutor'] || '').trim();
         const ipRaw        = String(row['IP do Remetente'] || '').trim();
         const device       = String(row['Device Remetente'] || '').trim();
-        const sentido      = String(row['Sentido'] || '').trim();
+        const sentido      = String(row['Sentido'] || '').trim().toUpperCase();
         const ip           = extrairIP(ipRaw);
 
         if (!interlocutor || !ip) return;
 
-        if (!porInterlocutor[interlocutor]) {
-          porInterlocutor[interlocutor] = {};
+        if (!extratoData[interlocutor]) {
+          extratoData[interlocutor] = { alvo: {}, interlocutor: {} };
         }
 
-        if (!porInterlocutor[interlocutor][ip]) {
-          porInterlocutor[interlocutor][ip] = { count: 0, devices: new Set(), sentidos: new Set() };
+        // ENVIADA = IP do ALVO (investigado enviou); RECEBIDA = IP do INTERLOCUTOR
+        const tipo = sentido === 'ENVIADA' ? 'alvo' : 'interlocutor';
+
+        if (!extratoData[interlocutor][tipo][ip]) {
+          extratoData[interlocutor][tipo][ip] = { count: 0, devices: new Set() };
         }
-
-        porInterlocutor[interlocutor][ip].count++;
-        if (device) porInterlocutor[interlocutor][ip].devices.add(device);
-        if (sentido) porInterlocutor[interlocutor][ip].sentidos.add(sentido);
+        extratoData[interlocutor][tipo][ip].count++;
+        if (device) extratoData[interlocutor][tipo][ip].devices.add(device);
       });
 
-      const interlocutores = Object.keys(porInterlocutor).sort();
-      title.textContent = `IPs DO EXTRATO — ${interlocutores.length} interlocutores`;
-
-      let html = '';
-      interlocutores.forEach(num => {
-        const ips = porInterlocutor[num];
-        const ipList = Object.entries(ips)
-          .sort((a, b) => b[1].count - a[1].count);
-
-        let ipRows = '';
-        ipList.forEach(([ip, info]) => {
-          const cls    = isIPv6(ip) ? 'ipv6' : '';
-          const devs   = [...info.devices].join(', ');
-          const label  = isIPv6(ip) ? 'IPv6' : 'IPv4';
-          ipRows += `
-            <div class="extrato-ip-row">
-              <div>
-                <div class="extrato-ip-val ${cls}">${ip}</div>
-                <div style="font-family:'Share Tech Mono',monospace;font-size:7px;color:var(--dim);margin-top:2px">${label}${devs ? ' · ' + devs : ''} · ${info.count}x</div>
-              </div>
-              <button class="extrato-ip-btn" onclick="consultarIPExtrato('${ip.replace(/'/g,"\'")}')">⊞ CONSULTAR</button>
-            </div>`;
-        });
-
-        html += `
-          <div class="extrato-card">
-            <div class="extrato-card-num">+${num}</div>
-            ${ipRows}
-            <div class="extrato-count">${ipList.length} IP(s) único(s)</div>
-          </div>`;
+      // Popula select de números
+      const numeros = Object.keys(extratoData).sort();
+      selNum.innerHTML = '<option value="">TODOS OS NÚMEROS</option>';
+      numeros.forEach(n => {
+        const opt = document.createElement('option');
+        opt.value = n;
+        opt.textContent = '+' + n;
+        selNum.appendChild(opt);
       });
 
-      grid.innerHTML = html || '<div class="ip-loading" style="padding:20px">NENHUM IP ENCONTRADO</div>';
+      extratoFiltro = 'todos';
+      extratoNumero = '';
+      document.querySelectorAll('.extrato-filter-btn').forEach((b,i) => {
+        b.classList.toggle('active', i === 0);
+      });
+
+      title.textContent = `IPs DO EXTRATO — ${numeros.length} interlocutores`;
+      renderExtrato();
 
     } catch(e) {
       grid.innerHTML = `<div class="ip-error" style="padding:20px">ERRO AO LER PLANILHA: ${e.message}</div>`;
     }
 
-    // Limpa o input para permitir recarregar o mesmo arquivo
     input.value = '';
   }
 
