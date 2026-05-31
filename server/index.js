@@ -379,7 +379,13 @@ app.get('/api/chats/:jid/messages', (req, res) => {
 
 function normalizarIP(input) {
   if (!input) return '';
-  let ip = String(input).trim();
+  let ip = decodeURIComponent(String(input).trim());
+
+  // Aceita URLs como https://rdap.registro.br/ip/138.121.119.74 ou parâmetros ?id=...
+  const q = ip.match(/[?&]id=([^&\s]+)/);
+  if (q) ip = decodeURIComponent(q[1].trim());
+  const path = ip.match(/\/ip\/([^/?#\s]+)/i);
+  if (path) ip = decodeURIComponent(path[1].trim());
 
   // IPv6 com porta: [2804:...:c701]:52386
   const ipv6ComPorta = ip.match(/^\[([^\]]+)\](?::\d+)?$/);
@@ -398,39 +404,69 @@ function vcardValue(entity, field) {
   return item ? item[3] : null;
 }
 
+async function fetchJsonWithTimeout(url, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, {
+      headers: { Accept: 'application/rdap+json, application/json' },
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+    if (!r.ok) return { ok: false, status: r.status, url };
+    return { ok: true, data: await r.json(), url };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function rdapEndpoints(ip) {
+  const eip = encodeURIComponent(ip);
+  return [
+    // Bootstrap tenta direcionar para o registro correto conforme a delegação global do IP.
+    `https://rdap-bootstrap.arin.net/bootstrap/ip/${eip}`,
+    `https://rdap.org/ip/${eip}`,
+    // Brasil/LACNIC continuam como fontes prioritárias práticas para os extratos analisados.
+    `https://rdap.registro.br/ip/${eip}`,
+    `https://rdap.lacnic.net/rdap/ip/${eip}`,
+    `https://rdap.arin.net/registry/ip/${eip}`,
+    `https://rdap.db.ripe.net/ip/${eip}`,
+    `https://rdap.apnic.net/ip/${eip}`,
+    `https://rdap.afrinic.net/rdap/ip/${eip}`,
+  ];
+}
+
 app.get('/api/ip/:ip', async (req, res) => {
   const ip = normalizarIP(req.params.ip);
   if (!ip) return res.status(400).json({ ok: false, error: 'IP obrigatório' });
 
-  // Cache em memória: evita consultar o mesmo IP repetidas vezes enquanto o PM2/Node estiver ativo.
-  if (ipCache[ip]) return res.json(ipCache[ip]);
+  // Cache em memória: guarda apenas respostas positivas. Erro pode ser falha temporária de RDAP.
+  if (ipCache[ip]?.ok) return res.json(ipCache[ip]);
 
   try {
-    // Tenta Registro.br primeiro (Brasil), depois LACNIC e ARIN como fallback.
-    const endpoints = [
-      `https://rdap.registro.br/ip/${encodeURIComponent(ip)}`,
-      `https://rdap.lacnic.net/rdap/ip/${encodeURIComponent(ip)}`,
-      `https://rdap.arin.net/registry/ip/${encodeURIComponent(ip)}`,
-    ];
+    const endpoints = rdapEndpoints(ip);
 
     let data = null;
     let fonte = null;
+    const tentativas = [];
 
     for (const url of endpoints) {
       try {
-        const r = await fetch(url, { headers: { Accept: 'application/rdap+json, application/json' } });
+        const r = await fetchJsonWithTimeout(url);
         if (r.ok) {
-          data = await r.json();
-          fonte = url;
+          data = r.data;
+          fonte = r.url;
           break;
         }
-      } catch(e) {}
+        tentativas.push(`${url} => HTTP ${r.status}`);
+      } catch(e) {
+        tentativas.push(`${url} => ${e.name === 'AbortError' ? 'timeout' : e.message}`);
+      }
     }
 
     if (!data) {
-      const resposta = { ok: false, error: 'IP não encontrado em nenhum registro' };
-      ipCache[ip] = resposta;
-      return res.json(resposta);
+      console.warn('[INTEL] RDAP não localizou IP:', ip, tentativas.join(' | '));
+      return res.json({ ok: false, error: 'IP não encontrado em nenhum registro RDAP disponível no momento' });
     }
 
     const asn = data.arin_originas0_asns?.[0]
