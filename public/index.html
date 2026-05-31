@@ -229,16 +229,12 @@
   .extrato-filter-btn.alvo.active{background:rgba(57,255,20,0.07);}
   .extrato-filter-btn.interlocutor{border-color:rgba(255,204,0,0.4);color:#ffcc00;}
   .extrato-filter-btn.interlocutor.active{background:rgba(255,204,0,0.07);}
-  .extrato-filter-btn.ipcomum{border-color:rgba(255,190,0,0.55);color:#ffbe00;}
-  .extrato-filter-btn.ipcomum.active{background:rgba(255,190,0,0.08);box-shadow:0 0 14px rgba(255,190,0,0.12);}
   .extrato-search-ip{background:transparent;border:1px solid var(--border);color:var(--fg);font-family:'Share Tech Mono',monospace;font-size:10px;padding:6px 10px;flex:1;min-width:140px;outline:none;}
   .extrato-search-ip:focus{border-color:var(--accent);}
   .extrato-select{background:var(--bg2);border:1px solid var(--border);color:var(--fg);font-family:'Share Tech Mono',monospace;font-size:9px;padding:6px 10px;cursor:pointer;outline:none;letter-spacing:1px;min-width:170px;}
   .extrato-select:focus{border-color:var(--accent);}
   .extrato-tag-alvo{font-size:7px;padding:1px 5px;background:rgba(57,255,20,0.1);color:#39ff14;border:1px solid rgba(57,255,20,0.3);margin-left:4px;}
   .extrato-tag-interlocutor{font-size:7px;padding:1px 5px;background:rgba(255,204,0,0.1);color:#ffcc00;border:1px solid rgba(255,204,0,0.3);margin-left:4px;}
-  .extrato-tag-ipcomum{font-size:7px;padding:1px 5px;background:rgba(255,190,0,0.1);color:#ffbe00;border:1px solid rgba(255,190,0,0.35);margin-left:4px;}
-  .extrato-common-line{font-family:'Share Tech Mono',monospace;font-size:7px;color:#ffbe00;margin-top:2px;letter-spacing:0.5px;}
   .extrato-stats{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);letter-spacing:1px;padding:8px 0;border-bottom:1px solid var(--border);margin-bottom:12px;}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -329,7 +325,6 @@
         <button class="extrato-filter-btn active" onclick="setExtratoFiltro('todos',this)">TODOS</button>
         <button class="extrato-filter-btn alvo" onclick="setExtratoFiltro('alvo',this)">● ALVO</button>
         <button class="extrato-filter-btn interlocutor" onclick="setExtratoFiltro('interlocutor',this)">● INTERLOCUTOR</button>
-        <button class="extrato-filter-btn ipcomum" onclick="setExtratoFiltro('ipcomum',this)">⛓ IP EM COMUM</button>
         <select class="extrato-select" id="extratoSelectAlvo" onchange="setExtratoAlvo(this.value)">
           <option value="">TODOS OS ALVOS</option>
         </select>
@@ -1483,52 +1478,12 @@
     return false;
   }
 
-  function buildCommonIPMap(baseRows = extratoRows) {
-    const map = {};
-    (baseRows || []).forEach(row => {
-      if (!row.ip) return;
-      if (!map[row.ip]) {
-        map[row.ip] = {
-          alvos: new Set(),
-          interlocutores: new Set(),
-          tipos: new Set(),
-          count: 0
-        };
-      }
-      map[row.ip].count++;
-      if (row.alvo) map[row.ip].alvos.add(row.alvo);
-      if (row.interlocutor) map[row.ip].interlocutores.add(row.interlocutor);
-      if (row.tipo) map[row.ip].tipos.add(row.tipo);
-    });
-    return map;
-  }
-
-  function isCommonIPInfo(info) {
-    if (!info) return false;
-    return info.alvos.size > 1 || info.interlocutores.size > 1 || info.tipos.size > 1;
-  }
-
-  function commonIPLabel(ip, commonMap) {
-    const info = commonMap?.[ip];
-    if (!isCommonIPInfo(info)) return '';
-    const parts = [];
-    if (info.alvos.size > 1) parts.push(`${info.alvos.size} alvos`);
-    if (info.interlocutores.size > 1) parts.push(`${info.interlocutores.size} interlocutores`);
-    if (info.tipos.size > 1) parts.push('alvo/interlocutor');
-    return parts.length ? parts.join(' · ') : 'cruzamento técnico';
-  }
-
   function getFilteredExtratoRows() {
     const searchVal = (document.getElementById('extratoSearchIP')?.value || '').trim();
-    const commonMap = buildCommonIPMap(extratoRows);
     return extratoRows.filter(row => {
       if (extratoAlvo && row.alvo !== extratoAlvo) return false;
       if (extratoNumero && row.interlocutor !== extratoNumero) return false;
-      if (extratoFiltro === 'ipcomum') {
-        if (!isCommonIPInfo(commonMap[row.ip])) return false;
-      } else if (extratoFiltro !== 'todos' && row.tipo !== extratoFiltro) {
-        return false;
-      }
+      if (extratoFiltro !== 'todos' && row.tipo !== extratoFiltro) return false;
       return extratoSearchMatch(row, searchVal);
     });
   }
@@ -1536,7 +1491,6 @@
   function renderExtrato() {
     const grid  = document.getElementById('extratoGrid');
     const stats = document.getElementById('extratoStats');
-    const commonMap = buildCommonIPMap(extratoRows);
     const rows  = getFilteredExtratoRows();
 
     const grouped = {};
@@ -1600,8 +1554,6 @@
             ? '<span class="extrato-tag-alvo">ALVO</span>'
             : '<span class="extrato-tag-interlocutor">INTERLOCUT.</span>'
         ).join('');
-        const commonLabel = commonIPLabel(ip, commonMap);
-        const commonTag = commonLabel ? '<span class="extrato-tag-ipcomum">IP COMUM</span>' : '';
 
         const details = [
           label,
@@ -1615,9 +1567,6 @@
         const targetLine = alvosIp
           ? `<div style="font-family:'Share Tech Mono',monospace;font-size:7px;color:#39ff14;margin-top:2px">ALVO ${htmlSafe(alvosIp)}${invIp ? ' · ' + htmlSafe(invIp) : ''}</div>`
           : '';
-        const commonLine = commonLabel
-          ? `<div class="extrato-common-line">IP EM COMUM: ${htmlSafe(commonLabel)}</div>`
-          : '';
 
         ipRows += `
           <div class="extrato-ip-row">
@@ -1625,12 +1574,10 @@
               <div style="display:flex;align-items:center;gap:4px">
                 <div class="extrato-ip-val ${cls}">${htmlSafe(ip)}</div>
                 ${tagHTML}
-                ${commonTag}
               </div>
               <div style="font-family:'Share Tech Mono',monospace;font-size:7px;color:var(--dim);margin-top:2px">${htmlSafe(details)}</div>
               ${providerLine}
               ${targetLine}
-              ${commonLine}
             </div>
             <button class="extrato-ip-btn" onclick="consultarIPExtrato('${jsStr(ip)}')">⊞ CONSULTAR</button>
           </div>`;
@@ -1646,9 +1593,8 @@
     });
 
     const alvosExibidos = new Set(rows.map(r => r.alvo).filter(Boolean));
-    const ipsComunsExibidos = new Set(rows.filter(r => isCommonIPInfo(commonMap[r.ip])).map(r => r.ip));
     grid.innerHTML  = html || '<div class="ip-loading" style="padding:20px">NENHUM IP ENCONTRADO</div>';
-    stats.textContent = `${totalCards} interlocutor(es) · ${totalIPs} IP(s) único(s) · ${alvosExibidos.size} alvo(s) exibido(s) · ${ipsComunsExibidos.size} IP(s) em comum`;
+    stats.textContent = `${totalCards} interlocutor(es) · ${totalIPs} IP(s) único(s) · ${alvosExibidos.size} alvo(s) exibido(s)`;
     setTimeout(() => scheduleProviderLookup([...ipsParaConsulta]), 80);
   }
 
