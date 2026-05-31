@@ -1313,7 +1313,7 @@
 
   // Cache local para evitar consultar o mesmo IP repetidas vezes.
   // A consulta de provedor é feita em fila, com baixa concorrência, para não travar o painel.
-  const IP_PROVIDER_CACHE_KEY = 'intel_ip_provider_cache_v1';
+  const IP_PROVIDER_CACHE_KEY = 'intel_ip_provider_cache_v2';
   const IP_PROVIDER_CONCURRENCY = 2;
   let ipProviderCache = {};
   let ipProviderQueue = [];
