@@ -398,10 +398,42 @@ function normalizarIP(input) {
   return ip;
 }
 
-function vcardValue(entity, field) {
+function vcardRawValue(entity, field) {
   const vcard = entity?.vcardArray?.[1] || [];
   const item = vcard.find(v => v && v[0] === field);
   return item ? item[3] : null;
+}
+
+function vcardValue(entity, field) {
+  const raw = vcardRawValue(entity, field);
+  if (raw == null) return null;
+
+  if (Array.isArray(raw)) {
+    const txt = raw.map(v => (v == null ? '' : String(v).trim())).filter(Boolean).join(' ');
+    return txt || null;
+  }
+
+  if (typeof raw === 'object') {
+    const txt = raw['country-name'] || raw.country || raw.label ||
+      Object.values(raw).map(v => (v == null ? '' : String(v).trim())).filter(Boolean).join(' ');
+    return txt || null;
+  }
+
+  const txt = String(raw).trim();
+  return txt || null;
+}
+
+function vcardCountry(entity) {
+  const adr = vcardRawValue(entity, 'adr');
+  if (Array.isArray(adr)) return String(adr[6] || '').trim() || null;
+  if (adr && typeof adr === 'object') return adr['country-name'] || adr.country || null;
+  return null;
+}
+
+function rdapIpPath(ip) {
+  // Em IPv6, os ":" fazem parte do caminho aceito pelo RDAP do registro.br.
+  // encodeURIComponent transforma ":" em "%3A" e pode gerar HTTP 400 em alguns servidores RDAP.
+  return String(ip || '').trim();
 }
 
 async function fetchJsonWithTimeout(url, timeoutMs = 8000) {
@@ -441,7 +473,7 @@ function isBrazilianOrLacnicIP(ip) {
 }
 
 function rdapEndpoints(ip) {
-  const eip = encodeURIComponent(ip);
+  const eip = rdapIpPath(ip);
 
   if (isBrazilianOrLacnicIP(ip)) {
     // IPs brasileiros: vai direto para registro.br e LACNIC.
@@ -466,33 +498,16 @@ function rdapEndpoints(ip) {
   ];
 }
 
-// Tenta os dois primeiros endpoints em paralelo; retorna o primeiro que responder com sucesso.
-// Se ambos falharem, tenta os restantes em sequência (fallback).
+// Consulta RDAP em ordem de prioridade.
+// Para IPs brasileiros, o registro.br deve ser preferido porque traz CNPJ/titular com mais precisão.
+// A corrida paralela podia devolver primeiro o LACNIC/rdap.org, com dados menos completos.
 async function queryRdapWithRace(endpoints) {
   if (!endpoints.length) return null;
 
-  const primary = endpoints.slice(0, 2);
-  const fallback = endpoints.slice(2);
-
-  // Corrida entre os endpoints primários
-  try {
-    const result = await Promise.any(
-      primary.map(url =>
-        fetchJsonWithTimeout(url).then(r => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          return r;
-        })
-      )
-    );
-    return result;
-  } catch (_) {
-    // Ambos primários falharam — tenta fallback em sequência
-  }
-
-  for (const url of fallback) {
+  for (const url of endpoints) {
     try {
       const r = await fetchJsonWithTimeout(url);
-      if (r.ok) return r;
+      if (r.ok && r.data) return r;
     } catch (_) {}
   }
 
@@ -520,6 +535,7 @@ app.get('/api/ip/:ip', async (req, res) => {
     let fonte = rdapResult.url;
 
     const asn = data.arin_originas0_asns?.[0]
+      || (data.nicbr_autnum ? `AS${data.nicbr_autnum}` : null)
       || data.autnums?.[0]?.handle
       || data.handle?.match(/AS\d+/i)?.[0]
       || null;
@@ -537,13 +553,16 @@ app.get('/api/ip/:ip', async (req, res) => {
       if (ev.eventAction === 'last changed') alterado = ev.eventDate?.split('T')[0];
     });
 
+    let registrantEncontrado = false;
+
     const processEntity = (entity) => {
       const nome = vcardValue(entity, 'fn');
       const org = vcardValue(entity, 'org');
       const email = vcardValue(entity, 'email');
-      const adr = vcardValue(entity, 'adr');
-      const paisVal = adr && typeof adr === 'object' ? adr['country-name'] : null;
-      const roles = entity.roles || [];
+      const paisVal = vcardCountry(entity);
+      const roles = Array.isArray(entity.roles) ? entity.roles : [];
+      const isRegistrant = roles.includes('registrant');
+      const nomePreferencial = org || nome || null;
 
       let doc = null;
       (entity.publicIds || []).forEach(pid => {
@@ -557,11 +576,21 @@ app.get('/api/ip/:ip', async (req, res) => {
         if (ev.eventAction === 'last changed') entAlterado = ev.eventDate?.split('T')[0];
       });
 
-      // Preferência: entidade registrante. Fallback: primeira entidade com org/fn.
-      if (roles.includes('registrant') || (!titular && (org || nome))) {
-        titular = titular || org || nome;
-        documento = documento || doc;
-        responsavel = responsavel || nome || org;
+      // O registrante é o titular real do bloco e deve sobrescrever qualquer fallback
+      // eventualmente capturado em entidade administrativa/técnica.
+      if (isRegistrant) {
+        if (nomePreferencial) titular = nomePreferencial;
+        if (doc) documento = doc;
+        responsavel = nome || org || responsavel;
+        pais = pais || paisVal;
+        criado = criado || entCriado;
+        alterado = alterado || entAlterado;
+        registrantEncontrado = registrantEncontrado || !!(nomePreferencial || doc);
+      } else if (!registrantEncontrado && !titular && nomePreferencial) {
+        // Fallback somente enquanto nenhum registrante foi encontrado.
+        titular = nomePreferencial;
+        if (doc) documento = doc;
+        responsavel = nome || org || responsavel;
         pais = pais || paisVal;
         criado = criado || entCriado;
         alterado = alterado || entAlterado;
