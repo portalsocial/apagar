@@ -211,6 +211,11 @@
   .extrato-ip-row{display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);}
   .extrato-ip-val{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--fg);letter-spacing:0.5px;flex:1;}
   .extrato-ip-val.ipv6{color:rgba(0,229,255,0.6);font-size:8px;}
+  .extrato-provider{font-family:'Share Tech Mono',monospace;font-size:7px;color:#ffbe00;margin-top:2px;letter-spacing:0.5px;}
+  .extrato-provider b{color:#ffbe00;font-weight:400;}
+  .extrato-provider small{color:var(--dim);}
+  .extrato-provider.loading{color:var(--dim);}
+  .extrato-provider.error{color:rgba(255,61,113,0.75);}
   .extrato-ip-btn{font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:1px;padding:3px 8px;border:1px solid var(--border);background:transparent;color:var(--dim);cursor:pointer;white-space:nowrap;margin-left:8px;}
   .extrato-ip-btn:hover{border-color:var(--accent);color:var(--accent);}
   .extrato-count{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);margin-top:6px;letter-spacing:1px;}
@@ -261,7 +266,7 @@
 <div class="app">
   <div class="sidebar">
     <div class="sb-sect">
-      <div class="lbl">▸ IMPORTAR DADOS DE WHATSAPP</div>
+      <div class="lbl">▸ IMPORTAR DADDOS DE WHATSAPP</div>
       <div class="import-drop" id="importDrop">
         <input type="file" id="importFile" accept=".html,.xlsx,.xls" multiple onchange="handleImportFiles(this.files)">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -886,6 +891,28 @@
       // Limpa sistema de importacao de arquivos
       importedFiles = [];
       allGroups = {};
+      ipProviderQueue = [];
+      ipProviderQueued = new Set();
+
+      // Limpa dados do extrato/importação, mas preserva o cache local de provedores
+      // para não consultar novamente IPs já identificados em uso posterior.
+      extratoRows = [];
+      extratoFiltro = 'todos';
+      extratoNumero = '';
+      extratoAlvo = '';
+      const extratoPanel = document.getElementById('extratoPanel');
+      const extratoGrid = document.getElementById('extratoGrid');
+      const extratoStats = document.getElementById('extratoStats');
+      const extratoSearch = document.getElementById('extratoSearchIP');
+      const extratoSelAlvo = document.getElementById('extratoSelectAlvo');
+      const extratoSelNum = document.getElementById('extratoSelectNum');
+      if (extratoPanel) extratoPanel.style.display = 'none';
+      if (extratoGrid) extratoGrid.innerHTML = '';
+      if (extratoStats) extratoStats.textContent = '';
+      if (extratoSearch) extratoSearch.value = '';
+      if (extratoSelAlvo) extratoSelAlvo.innerHTML = '<option value="">TODOS OS ALVOS</option>';
+      if (extratoSelNum) extratoSelNum.innerHTML = '<option value="">TODOS OS INTERLOCUTORES</option>';
+
       if (typeof allExtracted !== 'undefined') {
         Object.keys(allExtracted).forEach(k => delete allExtracted[k]);
       }
@@ -899,25 +926,6 @@
       // Limpa filtros de grupo
       const filterWrap = document.getElementById('filterWrap');
       if (filterWrap) { filterWrap.innerHTML = ''; filterWrap.style.display = 'none'; }
-
-      // Limpa painel de extrato/IP e filtros de alvo/interlocutor
-      if (typeof extratoRows !== 'undefined') extratoRows = [];
-      if (typeof extratoFiltro !== 'undefined') extratoFiltro = 'todos';
-      if (typeof extratoNumero !== 'undefined') extratoNumero = '';
-      if (typeof extratoAlvo !== 'undefined') extratoAlvo = '';
-      const extratoPanel = document.getElementById('extratoPanel');
-      const extratoGrid = document.getElementById('extratoGrid');
-      const extratoStats = document.getElementById('extratoStats');
-      const extratoSearch = document.getElementById('extratoSearchIP');
-      const selAlvo = document.getElementById('extratoSelectAlvo');
-      const selNum = document.getElementById('extratoSelectNum');
-      if (extratoPanel) extratoPanel.style.display = 'none';
-      if (extratoGrid) extratoGrid.innerHTML = '';
-      if (extratoStats) extratoStats.textContent = '';
-      if (extratoSearch) extratoSearch.value = '';
-      if (selAlvo) selAlvo.innerHTML = '<option value="">TODOS OS ALVOS</option>';
-      if (selNum) selNum.innerHTML = '<option value="">TODOS OS INTERLOCUTORES</option>';
-      document.querySelectorAll('.extrato-filter-btn').forEach((b,i) => b.classList.toggle('active', i === 0));
 
       renderGrid(); updateStats();
       fetch('/api/cache/clear', { method: 'POST' });
@@ -1283,6 +1291,15 @@
   let extratoNumero = '';
   let extratoAlvo = '';
 
+  // Cache local para evitar consultar o mesmo IP repetidas vezes.
+  // A consulta de provedor é feita em fila, com baixa concorrência, para não travar o painel.
+  const IP_PROVIDER_CACHE_KEY = 'intel_ip_provider_cache_v1';
+  const IP_PROVIDER_CONCURRENCY = 2;
+  let ipProviderCache = {};
+  let ipProviderQueue = [];
+  let ipProviderQueued = new Set();
+  let ipProviderActive = 0;
+
   function extrairIP(urlOuIp) {
     if (!urlOuIp) return null;
     const s = String(urlOuIp).trim();
@@ -1314,6 +1331,109 @@
   function htmlSafe(v) {
     return String(v ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   }
+
+  function loadIPProviderCache() {
+    try {
+      const raw = localStorage.getItem(IP_PROVIDER_CACHE_KEY);
+      ipProviderCache = raw ? JSON.parse(raw) : {};
+    } catch(e) {
+      ipProviderCache = {};
+    }
+  }
+
+  function saveIPProviderCache() {
+    try {
+      localStorage.setItem(IP_PROVIDER_CACHE_KEY, JSON.stringify(ipProviderCache));
+    } catch(e) {
+      // Se o navegador bloquear ou lotar o localStorage, o sistema continua funcionando sem cache persistente.
+    }
+  }
+
+  function ipProviderDomId(ip) {
+    return 'prov_' + String(ip || '').replace(/[^a-zA-Z0-9]/g, '_');
+  }
+
+  function extractProviderInfo(data) {
+    const d = data && data.result ? data.result : {};
+    const provider = String(d.titular || d.nome || d.responsavel || '').trim();
+    const asn = String(d.asn || '').trim();
+    return { provider, asn };
+  }
+
+  function renderProviderLine(ip) {
+    const cached = ipProviderCache[ip];
+    const id = ipProviderDomId(ip);
+
+    if (cached && cached.provider) {
+      const asn = cached.asn ? ` <small>· ${htmlSafe(cached.asn)}</small>` : '';
+      return `<div class="extrato-provider" id="${id}">PROVEDOR: <b>${htmlSafe(cached.provider)}</b>${asn}</div>`;
+    }
+
+    if (cached && cached.error) {
+      return `<div class="extrato-provider error" id="${id}">PROVEDOR: não localizado</div>`;
+    }
+
+    return `<div class="extrato-provider loading" id="${id}">PROVEDOR: aguardando consulta</div>`;
+  }
+
+  function updateProviderLine(ip, text, cls='loading') {
+    const el = document.getElementById(ipProviderDomId(ip));
+    if (!el) return;
+    if (text) {
+      el.className = 'extrato-provider ' + cls;
+      el.innerHTML = text;
+    } else {
+      el.outerHTML = renderProviderLine(ip);
+    }
+  }
+
+  function scheduleProviderLookup(ips) {
+    (ips || []).forEach(ip => {
+      if (!ip || ipProviderCache[ip] || ipProviderQueued.has(ip)) return;
+      ipProviderQueued.add(ip);
+      ipProviderQueue.push(ip);
+    });
+    processProviderQueue();
+  }
+
+  function processProviderQueue() {
+    while (ipProviderActive < IP_PROVIDER_CONCURRENCY && ipProviderQueue.length) {
+      const ip = ipProviderQueue.shift();
+      ipProviderActive++;
+      fetchProviderForIP(ip).finally(() => {
+        ipProviderActive--;
+        // Pequena pausa para evitar rajada de requisições quando houver muitos IPs.
+        setTimeout(processProviderQueue, 300);
+      });
+    }
+  }
+
+  async function fetchProviderForIP(ip) {
+    updateProviderLine(ip, 'PROVEDOR: consultando...', 'loading');
+    try {
+      const res = await fetch(`/api/ip/${encodeURIComponent(ip)}`);
+      const data = await res.json();
+
+      if (!data.ok) throw new Error(data.error || 'IP não localizado');
+
+      const info = extractProviderInfo(data);
+      if (!info.provider && !info.asn) throw new Error('Retorno sem titular/ASN');
+
+      ipProviderCache[ip] = {
+        provider: info.provider || info.asn,
+        asn: info.provider ? info.asn : '',
+        ts: Date.now()
+      };
+      saveIPProviderCache();
+      updateProviderLine(ip);
+    } catch(e) {
+      ipProviderCache[ip] = { error: true, message: e.message, ts: Date.now() };
+      saveIPProviderCache();
+      updateProviderLine(ip, 'PROVEDOR: não localizado', 'error');
+    }
+  }
+
+  loadIPProviderCache();
 
   function setExtratoFiltro(filtro, btn) {
     extratoFiltro = filtro;
@@ -1400,6 +1520,7 @@
     });
 
     const numeros = Object.keys(grouped).sort();
+    const ipsParaConsulta = new Set();
     let totalCards = 0;
     let totalIPs   = 0;
     let html = '';
@@ -1420,6 +1541,7 @@
 
       let ipRows = '';
       ipList.forEach(([ip, info]) => {
+        ipsParaConsulta.add(ip);
         const cls      = isIPv6(ip) ? 'ipv6' : '';
         const devs     = [...(info.devices || new Set())].join(', ');
         const portas   = [...(info.portas || new Set())].slice(0, 4).join(', ');
@@ -1437,8 +1559,10 @@
           label,
           devs ? 'DEV: ' + devs : '',
           portas ? 'PORTA: ' + portas : '',
-          info.count + 'x'
+          info.count + (info.count === 1 ? ' ocorrência' : ' ocorrências')
         ].filter(Boolean).join(' · ');
+
+        const providerLine = renderProviderLine(ip);
 
         const targetLine = alvosIp
           ? `<div style="font-family:'Share Tech Mono',monospace;font-size:7px;color:#39ff14;margin-top:2px">ALVO ${htmlSafe(alvosIp)}${invIp ? ' · ' + htmlSafe(invIp) : ''}</div>`
@@ -1452,6 +1576,7 @@
                 ${tagHTML}
               </div>
               <div style="font-family:'Share Tech Mono',monospace;font-size:7px;color:var(--dim);margin-top:2px">${htmlSafe(details)}</div>
+              ${providerLine}
               ${targetLine}
             </div>
             <button class="extrato-ip-btn" onclick="consultarIPExtrato('${jsStr(ip)}')">⊞ CONSULTAR</button>
@@ -1470,6 +1595,7 @@
     const alvosExibidos = new Set(rows.map(r => r.alvo).filter(Boolean));
     grid.innerHTML  = html || '<div class="ip-loading" style="padding:20px">NENHUM IP ENCONTRADO</div>';
     stats.textContent = `${totalCards} interlocutor(es) · ${totalIPs} IP(s) único(s) · ${alvosExibidos.size} alvo(s) exibido(s)`;
+    setTimeout(() => scheduleProviderLookup([...ipsParaConsulta]), 80);
   }
 
   async function carregarExtrato(input) {
