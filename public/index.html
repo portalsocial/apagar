@@ -902,8 +902,10 @@
       ipProviderQueue = [];
       ipProviderQueued = new Set();
 
-      // Limpa dados do extrato/importação, mas preserva o cache local de provedores
-      // para não consultar novamente IPs já identificados em uso posterior.
+      // Limpa dados do extrato/importação e também o cache local de provedores.
+      // Cache negativo antigo é uma das causas de falso "PROVEDOR: não localizado".
+      ipProviderCache = {};
+      try { localStorage.removeItem(IP_PROVIDER_CACHE_KEY); } catch(e) {}
       extratoRows = [];
       extratoFiltro = 'todos';
       extratoNumero = '';
@@ -1223,7 +1225,7 @@
     body.innerHTML = '<div class="ip-loading" style="padding:20px">CONSULTANDO REGISTROS...</div>';
 
     try {
-      const res = await fetch(`/api/ip/${encodeURIComponent(ip)}`);
+      const res = await fetch(`/api/ip?id=${encodeURIComponent(ip)}`);
       const data = await res.json();
 
       if (!data.ok) {
@@ -1313,18 +1315,27 @@
 
   // Cache local para evitar consultar o mesmo IP repetidas vezes.
   // A consulta de provedor é feita em fila, com baixa concorrência, para não travar o painel.
-  const IP_PROVIDER_CACHE_KEY = 'intel_ip_provider_cache_v2';
+  const IP_PROVIDER_CACHE_KEY = 'intel_ip_provider_cache_v3';
+  const IP_PROVIDER_OLD_CACHE_KEYS = ['intel_ip_provider_cache_v1', 'intel_ip_provider_cache_v2'];
   const IP_PROVIDER_CONCURRENCY = 2;
   let ipProviderCache = {};
   let ipProviderQueue = [];
   let ipProviderQueued = new Set();
   let ipProviderActive = 0;
 
+  function safeDecode(v) {
+    try { return decodeURIComponent(v); } catch(e) { return v; }
+  }
+
   function extrairIP(urlOuIp) {
     if (!urlOuIp) return null;
-    let s = String(urlOuIp).trim();
-    const m = s.match(/[?&]id=([^&\s]+)/);
-    if (m) s = decodeURIComponent(m[1].trim());
+    let s = safeDecode(String(urlOuIp).trim()).replace(/^['"]+|['"]+$/g, '').trim();
+
+    const m = s.match(/[?&](?:id|ip)=([^&\s]+)/);
+    if (m) s = safeDecode(m[1].trim());
+
+    const path = s.match(/\/ip\/([^/?#\s]+)/i);
+    if (path) s = safeDecode(path[1].trim());
 
     // IPv6 com porta: [2804:...:c701]:52386
     const bracket = s.match(/^\[([^\]]+)\](?::\d+)?$/);
@@ -1334,7 +1345,15 @@
     const ipv4Porta = s.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/);
     if (ipv4Porta) return ipv4Porta[1];
 
-    if (/^[\d.:a-fA-F]+$/.test(s)) return s;
+    // IPv6 sem colchetes, inclusive formato com porta no final.
+    if (/^[0-9a-fA-F:.]+$/.test(s)) {
+      const parts = s.split(':');
+      if (parts.length === 9 && /^\d{2,6}$/.test(parts[8])) {
+        return parts.slice(0, 8).join(':');
+      }
+      return s;
+    }
+
     return null;
   }
 
@@ -1361,6 +1380,8 @@
 
   function loadIPProviderCache() {
     try {
+      // Invalida caches antigos que continham muitos falsos negativos.
+      IP_PROVIDER_OLD_CACHE_KEYS.forEach(k => localStorage.removeItem(k));
       const raw = localStorage.getItem(IP_PROVIDER_CACHE_KEY);
       ipProviderCache = raw ? JSON.parse(raw) : {};
     } catch(e) {
@@ -1380,15 +1401,13 @@
     const cached = ipProviderCache[ip];
     if (!cached) return null;
 
-    // Erros ficam válidos só por pouco tempo; isso evita que uma falha temporária trave novas consultas.
+    // Não deixa erro virar estado permanente. Erro de RDAP pode ser timeout, cache velho, rate limit ou falha de rede.
     if (cached.error) {
-      const ageMs = Date.now() - (cached.ts || 0);
-      if (ageMs > 5 * 60 * 1000) {
-        delete ipProviderCache[ip];
-        saveIPProviderCache();
-        return null;
-      }
+      delete ipProviderCache[ip];
+      saveIPProviderCache();
+      return null;
     }
+
     return cached;
   }
 
@@ -1412,10 +1431,6 @@
       return `<div class="extrato-provider" id="${id}">PROVEDOR: <b>${htmlSafe(cached.provider)}</b>${asn}</div>`;
     }
 
-    if (cached && cached.error) {
-      return `<div class="extrato-provider error" id="${id}">PROVEDOR: não localizado</div>`;
-    }
-
     return `<div class="extrato-provider loading" id="${id}">PROVEDOR: aguardando consulta</div>`;
   }
 
@@ -1434,11 +1449,6 @@
     (ips || []).forEach(ip => {
       if (!ip) return;
       if (getProviderCache(ip)) return;
-      // Se estava marcado como agendado mas não está mais na fila nem em execução
-      // (o DOM foi reconstruído por um re-render), limpa o marcador.
-      if (ipProviderQueued.has(ip) && !ipProviderQueue.includes(ip) && ipProviderActive === 0) {
-        ipProviderQueued.delete(ip);
-      }
       if (ipProviderQueued.has(ip)) return;
       ipProviderQueued.add(ip);
       ipProviderQueue.push(ip);
@@ -1452,8 +1462,9 @@
       ipProviderActive++;
       fetchProviderForIP(ip).finally(() => {
         ipProviderActive--;
-        // Pequena pausa para evitar rajada de requisições quando houver muitos IPs.
-        setTimeout(processProviderQueue, 300);
+        ipProviderQueued.delete(ip);
+        // Pausa maior para reduzir falso negativo por sobrecarga/rate limit do RDAP em consultas grandes.
+        setTimeout(processProviderQueue, 700);
       });
     }
   }
@@ -1461,7 +1472,8 @@
   async function fetchProviderForIP(ip) {
     updateProviderLine(ip, 'PROVEDOR: consultando...', 'loading');
     try {
-      const res = await fetch(`/api/ip/${encodeURIComponent(ip)}`);
+      // Rota por query string evita qualquer ambiguidade com IPv6 em parâmetro de caminho.
+      const res = await fetch(`/api/ip?id=${encodeURIComponent(ip)}`);
       const data = await res.json();
 
       if (!data.ok) throw new Error(data.error || 'IP não localizado');
@@ -1476,8 +1488,6 @@
       };
       saveIPProviderCache();
 
-      // Tenta atualizar inline; se o elemento sumiu (DOM reconstruído por filtro),
-      // redesenha o extrato inteiro com o cache já preenchido.
       const el = document.getElementById(ipProviderDomId(ip));
       if (el) {
         updateProviderLine(ip);
@@ -1485,11 +1495,13 @@
         renderExtrato();
       }
     } catch(e) {
-      ipProviderCache[ip] = { error: true, message: e.message, ts: Date.now() };
+      // Não grava cache negativo. Caso contrário, timeout momentâneo vira “não localizado” fixo.
+      delete ipProviderCache[ip];
       saveIPProviderCache();
+      const msg = htmlSafe(e.message || 'falha temporária');
       const el = document.getElementById(ipProviderDomId(ip));
       if (el) {
-        updateProviderLine(ip, 'PROVEDOR: não localizado', 'error');
+        updateProviderLine(ip, `PROVEDOR: falha temporária <small>${msg}</small>`, 'error');
       } else if (document.getElementById('extratoPanel').style.display !== 'none') {
         renderExtrato();
       }
