@@ -206,6 +206,8 @@
   .extrato-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;}
   .extrato-card{background:var(--bg2);border:1px solid var(--border);padding:14px;}
   .extrato-card-num{font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--accent);letter-spacing:1px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);}
+  .extrato-card-meta{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);letter-spacing:1px;margin:-4px 0 8px 0;line-height:1.6;}
+  .extrato-card-meta b{color:#39ff14;font-weight:400;}
   .extrato-ip-row{display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);}
   .extrato-ip-val{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--fg);letter-spacing:0.5px;flex:1;}
   .extrato-ip-val.ipv6{color:rgba(0,229,255,0.6);font-size:8px;}
@@ -224,7 +226,7 @@
   .extrato-filter-btn.interlocutor.active{background:rgba(255,204,0,0.07);}
   .extrato-search-ip{background:transparent;border:1px solid var(--border);color:var(--fg);font-family:'Share Tech Mono',monospace;font-size:10px;padding:6px 10px;flex:1;min-width:140px;outline:none;}
   .extrato-search-ip:focus{border-color:var(--accent);}
-  .extrato-select{background:var(--bg2);border:1px solid var(--border);color:var(--fg);font-family:'Share Tech Mono',monospace;font-size:9px;padding:6px 10px;cursor:pointer;outline:none;letter-spacing:1px;}
+  .extrato-select{background:var(--bg2);border:1px solid var(--border);color:var(--fg);font-family:'Share Tech Mono',monospace;font-size:9px;padding:6px 10px;cursor:pointer;outline:none;letter-spacing:1px;min-width:170px;}
   .extrato-select:focus{border-color:var(--accent);}
   .extrato-tag-alvo{font-size:7px;padding:1px 5px;background:rgba(57,255,20,0.1);color:#39ff14;border:1px solid rgba(57,255,20,0.3);margin-left:4px;}
   .extrato-tag-interlocutor{font-size:7px;padding:1px 5px;background:rgba(255,204,0,0.1);color:#ffcc00;border:1px solid rgba(255,204,0,0.3);margin-left:4px;}
@@ -259,7 +261,7 @@
 <div class="app">
   <div class="sidebar">
     <div class="sb-sect">
-      <div class="lbl">▸ IMPORTAR DADDOS DE WHATSAPP</div>
+      <div class="lbl">▸ IMPORTAR DADOS DE WHATSAPP</div>
       <div class="import-drop" id="importDrop">
         <input type="file" id="importFile" accept=".html,.xlsx,.xls" multiple onchange="handleImportFiles(this.files)">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -318,10 +320,13 @@
         <button class="extrato-filter-btn active" onclick="setExtratoFiltro('todos',this)">TODOS</button>
         <button class="extrato-filter-btn alvo" onclick="setExtratoFiltro('alvo',this)">● ALVO</button>
         <button class="extrato-filter-btn interlocutor" onclick="setExtratoFiltro('interlocutor',this)">● INTERLOCUTOR</button>
-        <select class="extrato-select" id="extratoSelectNum" onchange="setExtratoNumero(this.value)">
-          <option value="">TODOS OS NÚMEROS</option>
+        <select class="extrato-select" id="extratoSelectAlvo" onchange="setExtratoAlvo(this.value)">
+          <option value="">TODOS OS ALVOS</option>
         </select>
-        <input class="extrato-search-ip" id="extratoSearchIP" placeholder="BUSCAR IP..." oninput="renderExtrato()">
+        <select class="extrato-select" id="extratoSelectNum" onchange="setExtratoNumero(this.value)">
+          <option value="">TODOS OS INTERLOCUTORES</option>
+        </select>
+        <input class="extrato-search-ip" id="extratoSearchIP" placeholder="BUSCAR IP, ALVO, INTERLOCUTOR OU DEVICE..." oninput="renderExtrato()">
       </div>
       <div class="extrato-stats" id="extratoStats"></div>
       <div class="extrato-grid" id="extratoGrid"></div>
@@ -895,6 +900,25 @@
       const filterWrap = document.getElementById('filterWrap');
       if (filterWrap) { filterWrap.innerHTML = ''; filterWrap.style.display = 'none'; }
 
+      // Limpa painel de extrato/IP e filtros de alvo/interlocutor
+      if (typeof extratoRows !== 'undefined') extratoRows = [];
+      if (typeof extratoFiltro !== 'undefined') extratoFiltro = 'todos';
+      if (typeof extratoNumero !== 'undefined') extratoNumero = '';
+      if (typeof extratoAlvo !== 'undefined') extratoAlvo = '';
+      const extratoPanel = document.getElementById('extratoPanel');
+      const extratoGrid = document.getElementById('extratoGrid');
+      const extratoStats = document.getElementById('extratoStats');
+      const extratoSearch = document.getElementById('extratoSearchIP');
+      const selAlvo = document.getElementById('extratoSelectAlvo');
+      const selNum = document.getElementById('extratoSelectNum');
+      if (extratoPanel) extratoPanel.style.display = 'none';
+      if (extratoGrid) extratoGrid.innerHTML = '';
+      if (extratoStats) extratoStats.textContent = '';
+      if (extratoSearch) extratoSearch.value = '';
+      if (selAlvo) selAlvo.innerHTML = '<option value="">TODOS OS ALVOS</option>';
+      if (selNum) selNum.innerHTML = '<option value="">TODOS OS INTERLOCUTORES</option>';
+      document.querySelectorAll('.extrato-filter-btn').forEach((b,i) => b.classList.toggle('active', i === 0));
+
       renderGrid(); updateStats();
       fetch('/api/cache/clear', { method: 'POST' });
     }
@@ -1251,21 +1275,44 @@
   });
 
   // ======= EXTRATO IP =======
-  let extratoData = {}; // { interlocutor: { alvo: {ip: info}, interlocutor: {ip: info} } }
+  // A planilha pode conter mais de um alvo em "Identificador da Conta".
+  // Por isso o extrato é guardado linha a linha e filtrado dinamicamente por alvo,
+  // interlocutor, tipo de IP e campo de busca unificado.
+  let extratoRows = []; // [{alvo, investigado, interlocutor, tipo, ip, device, porta, data, hora, sentido}]
   let extratoFiltro = 'todos';
   let extratoNumero = '';
+  let extratoAlvo = '';
 
   function extrairIP(urlOuIp) {
     if (!urlOuIp) return null;
-    const s = String(urlOuIp);
+    const s = String(urlOuIp).trim();
     const m = s.match(/[?&]id=([^&\s]+)/);
     if (m) return m[1].trim();
-    if (/^[\d.:a-fA-F]+$/.test(s.trim())) return s.trim();
+    const bracket = s.match(/\[([^\]]+)\]/);
+    if (bracket) return bracket[1].trim();
+    if (/^[\d.:a-fA-F]+$/.test(s)) return s;
     return null;
   }
 
   function isIPv6(ip) {
     return ip && ip.includes(':');
+  }
+
+  function cleanDigits(v) {
+    return String(v || '').replace(/\D/g, '');
+  }
+
+  function displayPhone(v) {
+    const d = cleanDigits(v);
+    return d ? '+' + d : (String(v || '').trim() || '—');
+  }
+
+  function jsStr(v) {
+    return String(v || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  }
+
+  function htmlSafe(v) {
+    return String(v ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   }
 
   function setExtratoFiltro(filtro, btn) {
@@ -1280,104 +1327,163 @@
     renderExtrato();
   }
 
+  function setExtratoAlvo(val) {
+    extratoAlvo = val;
+    renderExtrato();
+  }
+
+  function extratoSearchMatch(row, searchVal) {
+    if (!searchVal) return true;
+    const q = searchVal.toLowerCase().trim();
+    const qDigits = cleanDigits(q);
+    const alvoTxt = displayPhone(row.alvo).toLowerCase();
+    const interTxt = displayPhone(row.interlocutor).toLowerCase();
+    const alvoDigits = cleanDigits(row.alvo);
+    const interDigits = cleanDigits(row.interlocutor);
+    const haystack = [
+      row.ip,
+      alvoTxt,
+      interTxt,
+      row.investigado,
+      row.device,
+      row.porta,
+      row.data,
+      row.hora,
+      row.sentido,
+      row.tipo
+    ].join(' ').toLowerCase();
+
+    if (haystack.includes(q)) return true;
+    if (qDigits && (alvoDigits.includes(qDigits) || interDigits.includes(qDigits))) return true;
+    return false;
+  }
+
+  function getFilteredExtratoRows() {
+    const searchVal = (document.getElementById('extratoSearchIP')?.value || '').trim();
+    return extratoRows.filter(row => {
+      if (extratoAlvo && row.alvo !== extratoAlvo) return false;
+      if (extratoNumero && row.interlocutor !== extratoNumero) return false;
+      if (extratoFiltro !== 'todos' && row.tipo !== extratoFiltro) return false;
+      return extratoSearchMatch(row, searchVal);
+    });
+  }
+
   function renderExtrato() {
-    const grid      = document.getElementById('extratoGrid');
-    const stats     = document.getElementById('extratoStats');
-    const searchVal = (document.getElementById('extratoSearchIP')?.value || '').toLowerCase();
+    const grid  = document.getElementById('extratoGrid');
+    const stats = document.getElementById('extratoStats');
+    const rows  = getFilteredExtratoRows();
 
-    const numeros = extratoNumero
-      ? [extratoNumero]
-      : Object.keys(extratoData).sort();
+    const grouped = {};
+    rows.forEach(row => {
+      const num = row.interlocutor || 'SEM_INTERLOCUTOR';
+      if (!grouped[num]) grouped[num] = { ips: {}, alvos: new Set(), investigados: new Set() };
+      grouped[num].alvos.add(row.alvo || '');
+      if (row.investigado && row.investigado !== '-') grouped[num].investigados.add(row.investigado);
 
+      if (!grouped[num].ips[row.ip]) {
+        grouped[num].ips[row.ip] = {
+          count: 0,
+          devices: new Set(),
+          tipo: new Set(),
+          alvos: new Set(),
+          investigados: new Set(),
+          portas: new Set()
+        };
+      }
+      const info = grouped[num].ips[row.ip];
+      info.count++;
+      if (row.device) info.devices.add(row.device);
+      if (row.porta) info.portas.add(row.porta);
+      info.tipo.add(row.tipo);
+      if (row.alvo) info.alvos.add(row.alvo);
+      if (row.investigado && row.investigado !== '-') info.investigados.add(row.investigado);
+    });
+
+    const numeros = Object.keys(grouped).sort();
     let totalCards = 0;
     let totalIPs   = 0;
     let html = '';
 
     numeros.forEach(num => {
-      const dados = extratoData[num];
-      // Decide quais IPs mostrar baseado no filtro
-      let ipsParaMostrar = {};
+      const dados = grouped[num];
+      const ipList = Object.entries(dados.ips).sort((a,b) => b[1].count - a[1].count);
+      if (!ipList.length) return;
 
-      if (extratoFiltro === 'todos') {
-        // Merge de alvo e interlocutor
-        Object.entries(dados.alvo || {}).forEach(([ip, info]) => {
-          if (!ipsParaMostrar[ip]) ipsParaMostrar[ip] = { count:0, devices:new Set(), tipo:new Set() };
-          ipsParaMostrar[ip].count += info.count;
-          info.devices.forEach(d => ipsParaMostrar[ip].devices.add(d));
-          ipsParaMostrar[ip].tipo.add('alvo');
-        });
-        Object.entries(dados.interlocutor || {}).forEach(([ip, info]) => {
-          if (!ipsParaMostrar[ip]) ipsParaMostrar[ip] = { count:0, devices:new Set(), tipo:new Set() };
-          ipsParaMostrar[ip].count += info.count;
-          info.devices.forEach(d => ipsParaMostrar[ip].devices.add(d));
-          ipsParaMostrar[ip].tipo.add('interlocutor');
-        });
-      } else {
-        Object.entries(dados[extratoFiltro] || {}).forEach(([ip, info]) => {
-          ipsParaMostrar[ip] = { ...info, tipo: new Set([extratoFiltro]) };
-        });
-      }
-
-      // Filtro de busca por IP
-      if (searchVal) {
-        ipsParaMostrar = Object.fromEntries(
-          Object.entries(ipsParaMostrar).filter(([ip]) => ip.toLowerCase().includes(searchVal))
-        );
-      }
-
-      if (Object.keys(ipsParaMostrar).length === 0) return;
-
-      const ipList = Object.entries(ipsParaMostrar).sort((a,b) => b[1].count - a[1].count);
       totalCards++;
       totalIPs += ipList.length;
 
+      const alvosCard = [...dados.alvos].filter(Boolean).map(displayPhone).join(', ');
+      const invCard   = [...dados.investigados].filter(Boolean).join(', ');
+      let meta = '';
+      if (alvosCard) meta += `<div>ALVO: <b>${htmlSafe(alvosCard)}</b></div>`;
+      if (invCard)   meta += `<div>INVESTIGADO: ${htmlSafe(invCard)}</div>`;
+
       let ipRows = '';
       ipList.forEach(([ip, info]) => {
-        const cls   = isIPv6(ip) ? 'ipv6' : '';
-        const devs  = [...(info.devices || new Set())].join(', ');
-        const label = isIPv6(ip) ? 'IPv6' : 'IPv4';
-        const tipos = [...(info.tipo || new Set())];
+        const cls      = isIPv6(ip) ? 'ipv6' : '';
+        const devs     = [...(info.devices || new Set())].join(', ');
+        const portas   = [...(info.portas || new Set())].slice(0, 4).join(', ');
+        const label    = isIPv6(ip) ? 'IPv6' : 'IPv4';
+        const tipos    = [...(info.tipo || new Set())];
+        const alvosIp  = [...(info.alvos || new Set())].filter(Boolean).map(displayPhone).join(', ');
+        const invIp    = [...(info.investigados || new Set())].filter(Boolean).join(', ');
         const tagHTML = tipos.map(t =>
           t === 'alvo'
             ? '<span class="extrato-tag-alvo">ALVO</span>'
             : '<span class="extrato-tag-interlocutor">INTERLOCUT.</span>'
         ).join('');
 
+        const details = [
+          label,
+          devs ? 'DEV: ' + devs : '',
+          portas ? 'PORTA: ' + portas : '',
+          info.count + 'x'
+        ].filter(Boolean).join(' · ');
+
+        const targetLine = alvosIp
+          ? `<div style="font-family:'Share Tech Mono',monospace;font-size:7px;color:#39ff14;margin-top:2px">ALVO ${htmlSafe(alvosIp)}${invIp ? ' · ' + htmlSafe(invIp) : ''}</div>`
+          : '';
+
         ipRows += `
           <div class="extrato-ip-row">
             <div style="flex:1">
               <div style="display:flex;align-items:center;gap:4px">
-                <div class="extrato-ip-val ${cls}">${ip}</div>
+                <div class="extrato-ip-val ${cls}">${htmlSafe(ip)}</div>
                 ${tagHTML}
               </div>
-              <div style="font-family:'Share Tech Mono',monospace;font-size:7px;color:var(--dim);margin-top:2px">${label}${devs ? ' · ' + devs : ''} · ${info.count}x</div>
+              <div style="font-family:'Share Tech Mono',monospace;font-size:7px;color:var(--dim);margin-top:2px">${htmlSafe(details)}</div>
+              ${targetLine}
             </div>
-            <button class="extrato-ip-btn" onclick="consultarIPExtrato('${ip.replace(/'/g,"\'")}')">⊞ CONSULTAR</button>
+            <button class="extrato-ip-btn" onclick="consultarIPExtrato('${jsStr(ip)}')">⊞ CONSULTAR</button>
           </div>`;
       });
 
       html += `
         <div class="extrato-card">
-          <div class="extrato-card-num">+${num}</div>
+          <div class="extrato-card-num">${htmlSafe(displayPhone(num))}</div>
+          ${meta ? `<div class="extrato-card-meta">${meta}</div>` : ''}
           ${ipRows}
           <div class="extrato-count">${ipList.length} IP(s) único(s)</div>
         </div>`;
     });
 
+    const alvosExibidos = new Set(rows.map(r => r.alvo).filter(Boolean));
     grid.innerHTML  = html || '<div class="ip-loading" style="padding:20px">NENHUM IP ENCONTRADO</div>';
-    stats.textContent = `${totalCards} número(s) · ${totalIPs} IP(s) único(s) exibidos`;
+    stats.textContent = `${totalCards} interlocutor(es) · ${totalIPs} IP(s) único(s) · ${alvosExibidos.size} alvo(s) exibido(s)`;
   }
 
   async function carregarExtrato(input) {
     const file = input.files[0];
     if (!file) return;
 
-    const panel    = document.getElementById('extratoPanel');
-    const grid     = document.getElementById('extratoGrid');
-    const title    = document.getElementById('extratoPanelTitle');
-    const mainGrid = document.getElementById('grid');
-    const ipPanel  = document.getElementById('ipPanel');
-    const selNum   = document.getElementById('extratoSelectNum');
+    const panel     = document.getElementById('extratoPanel');
+    const grid      = document.getElementById('extratoGrid');
+    const title     = document.getElementById('extratoPanelTitle');
+    const mainGrid  = document.getElementById('grid');
+    const ipPanel   = document.getElementById('ipPanel');
+    const selNum    = document.getElementById('extratoSelectNum');
+    const selAlvo   = document.getElementById('extratoSelectAlvo');
+    const searchInp = document.getElementById('extratoSearchIP');
 
     mainGrid.style.display = 'none';
     ipPanel.style.display  = 'none';
@@ -1391,52 +1497,73 @@
       const ws     = wb.Sheets[wb.SheetNames[0]];
       const rows   = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
-      extratoData = {};
+      extratoRows = [];
 
       rows.forEach(row => {
-        const interlocutor = String(row['Interlocutor'] || '').trim();
-        const ipRaw        = String(row['IP do Remetente'] || '').trim();
-        const device       = String(row['Device Remetente'] || '').trim();
+        const alvo         = cleanDigits(row['Identificador da Conta'] || row['Alvo'] || row['Conta'] || '');
+        const investigado  = String(row['Investigado'] || '').trim();
+        const interlocutor = cleanDigits(row['Interlocutor'] || '');
+        const ipRaw        = String(row['IP do Remetente'] || row['IP'] || '').trim();
+        const device       = String(row['Device Remetente'] || row['Device'] || '').trim();
+        const porta        = String(row['Porta do Remetente'] || row['Porta'] || '').trim();
         const sentido      = String(row['Sentido'] || '').trim().toUpperCase();
+        const data         = String(row['Data'] || '').trim();
+        const hora         = String(row['Hora (UTC-3)'] || row['Hora'] || '').trim();
         const ip           = extrairIP(ipRaw);
 
         if (!interlocutor || !ip) return;
 
-        if (!extratoData[interlocutor]) {
-          extratoData[interlocutor] = { alvo: {}, interlocutor: {} };
-        }
-
-        // ENVIADA = IP do ALVO (investigado enviou); RECEBIDA = IP do INTERLOCUTOR
+        // ENVIADA = IP do ALVO (investigado enviou); RECEBIDA = IP do INTERLOCUTOR.
+        // Caso o campo venha fora do padrão, preserva como interlocutor para evitar falso positivo de alvo.
         const tipo = sentido === 'ENVIADA' ? 'alvo' : 'interlocutor';
 
-        if (!extratoData[interlocutor][tipo][ip]) {
-          extratoData[interlocutor][tipo][ip] = { count: 0, devices: new Set() };
-        }
-        extratoData[interlocutor][tipo][ip].count++;
-        if (device) extratoData[interlocutor][tipo][ip].devices.add(device);
+        extratoRows.push({
+          alvo,
+          investigado,
+          interlocutor,
+          tipo,
+          ip,
+          device,
+          porta,
+          data,
+          hora,
+          sentido
+        });
       });
 
-      // Popula select de números
-      const numeros = Object.keys(extratoData).sort();
-      selNum.innerHTML = '<option value="">TODOS OS NÚMEROS</option>';
+      const alvos = [...new Set(extratoRows.map(r => r.alvo).filter(Boolean))].sort();
+      const numeros = [...new Set(extratoRows.map(r => r.interlocutor).filter(Boolean))].sort();
+
+      selAlvo.innerHTML = '<option value="">TODOS OS ALVOS</option>';
+      alvos.forEach(a => {
+        const invs = [...new Set(extratoRows.filter(r => r.alvo === a).map(r => r.investigado).filter(v => v && v !== '-'))];
+        const opt = document.createElement('option');
+        opt.value = a;
+        opt.textContent = displayPhone(a) + (invs.length ? ' · ' + invs.slice(0,2).join(', ') : '');
+        selAlvo.appendChild(opt);
+      });
+
+      selNum.innerHTML = '<option value="">TODOS OS INTERLOCUTORES</option>';
       numeros.forEach(n => {
         const opt = document.createElement('option');
         opt.value = n;
-        opt.textContent = '+' + n;
+        opt.textContent = displayPhone(n);
         selNum.appendChild(opt);
       });
 
       extratoFiltro = 'todos';
       extratoNumero = '';
+      extratoAlvo = '';
+      if (searchInp) searchInp.value = '';
       document.querySelectorAll('.extrato-filter-btn').forEach((b,i) => {
         b.classList.toggle('active', i === 0);
       });
 
-      title.textContent = `IPs DO EXTRATO — ${numeros.length} interlocutores`;
+      title.textContent = `IPs DO EXTRATO — ${alvos.length} alvo(s) · ${numeros.length} interlocutor(es)`;
       renderExtrato();
 
     } catch(e) {
-      grid.innerHTML = `<div class="ip-error" style="padding:20px">ERRO AO LER PLANILHA: ${e.message}</div>`;
+      grid.innerHTML = `<div class="ip-error" style="padding:20px">ERRO AO LER PLANILHA: ${htmlSafe(e.message)}</div>`;
     }
 
     input.value = '';
