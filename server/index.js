@@ -404,7 +404,7 @@ function vcardValue(entity, field) {
   return item ? item[3] : null;
 }
 
-async function fetchJsonWithTimeout(url, timeoutMs = 12000) {
+async function fetchJsonWithTimeout(url, timeoutMs = 8000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -420,13 +420,43 @@ async function fetchJsonWithTimeout(url, timeoutMs = 12000) {
   }
 }
 
+// Detecta faixas IPv4 tipicamente alocadas para o Brasil/LACNIC.
+// Permite ir direto ao registro correto sem tentar servidores americanos/europeus primeiro.
+function isBrazilianOrLacnicIP(ip) {
+  if (!ip) return false;
+  // IPv6: prefixos LACNIC (2001:12xx, 2800::/12 cobre todo bloco LACNIC)
+  if (ip.includes(':')) {
+    return /^(2800|2801|2802|2803|2804|2806|2001:12)/i.test(ip);
+  }
+  // IPv4: faixas alocadas predominantemente ao Brasil/LACNIC
+  const first = parseInt(ip.split('.')[0], 10);
+  const second = parseInt(ip.split('.')[1] || '0', 10);
+  // 177, 179, 186-200 são fortemente brasileiros
+  if ([177, 179, 186, 187, 188, 189, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200].includes(first)) return true;
+  // 45.x com ranges LACNIC, 138.x, 143.x, 170.x frequentes em extratos BR
+  if ([138, 143, 170, 189].includes(first)) return true;
+  // 45.x — muitos blocos BR mas compartilhado; inclui para priorizar LACNIC
+  if (first === 45) return true;
+  return false;
+}
+
 function rdapEndpoints(ip) {
   const eip = encodeURIComponent(ip);
+
+  if (isBrazilianOrLacnicIP(ip)) {
+    // IPs brasileiros: vai direto para registro.br e LACNIC.
+    // Só consulta os demais como fallback se os dois falharem.
+    return [
+      `https://rdap.registro.br/ip/${eip}`,
+      `https://rdap.lacnic.net/rdap/ip/${eip}`,
+      `https://rdap.org/ip/${eip}`,
+      `https://rdap-bootstrap.arin.net/bootstrap/ip/${eip}`,
+    ];
+  }
+
   return [
-    // Bootstrap tenta direcionar para o registro correto conforme a delegação global do IP.
     `https://rdap-bootstrap.arin.net/bootstrap/ip/${eip}`,
     `https://rdap.org/ip/${eip}`,
-    // Brasil/LACNIC continuam como fontes prioritárias práticas para os extratos analisados.
     `https://rdap.registro.br/ip/${eip}`,
     `https://rdap.lacnic.net/rdap/ip/${eip}`,
     `https://rdap.arin.net/registry/ip/${eip}`,
@@ -434,6 +464,39 @@ function rdapEndpoints(ip) {
     `https://rdap.apnic.net/ip/${eip}`,
     `https://rdap.afrinic.net/rdap/ip/${eip}`,
   ];
+}
+
+// Tenta os dois primeiros endpoints em paralelo; retorna o primeiro que responder com sucesso.
+// Se ambos falharem, tenta os restantes em sequência (fallback).
+async function queryRdapWithRace(endpoints) {
+  if (!endpoints.length) return null;
+
+  const primary = endpoints.slice(0, 2);
+  const fallback = endpoints.slice(2);
+
+  // Corrida entre os endpoints primários
+  try {
+    const result = await Promise.any(
+      primary.map(url =>
+        fetchJsonWithTimeout(url).then(r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r;
+        })
+      )
+    );
+    return result;
+  } catch (_) {
+    // Ambos primários falharam — tenta fallback em sequência
+  }
+
+  for (const url of fallback) {
+    try {
+      const r = await fetchJsonWithTimeout(url);
+      if (r.ok) return r;
+    } catch (_) {}
+  }
+
+  return null;
 }
 
 app.get('/api/ip/:ip', async (req, res) => {
@@ -446,28 +509,15 @@ app.get('/api/ip/:ip', async (req, res) => {
   try {
     const endpoints = rdapEndpoints(ip);
 
-    let data = null;
-    let fonte = null;
-    const tentativas = [];
+    const rdapResult = await queryRdapWithRace(endpoints);
 
-    for (const url of endpoints) {
-      try {
-        const r = await fetchJsonWithTimeout(url);
-        if (r.ok) {
-          data = r.data;
-          fonte = r.url;
-          break;
-        }
-        tentativas.push(`${url} => HTTP ${r.status}`);
-      } catch(e) {
-        tentativas.push(`${url} => ${e.name === 'AbortError' ? 'timeout' : e.message}`);
-      }
-    }
-
-    if (!data) {
-      console.warn('[INTEL] RDAP não localizou IP:', ip, tentativas.join(' | '));
+    if (!rdapResult) {
+      console.warn('[INTEL] RDAP não localizou IP:', ip);
       return res.json({ ok: false, error: 'IP não encontrado em nenhum registro RDAP disponível no momento' });
     }
+
+    let data = rdapResult.data;
+    let fonte = rdapResult.url;
 
     const asn = data.arin_originas0_asns?.[0]
       || data.autnums?.[0]?.handle
