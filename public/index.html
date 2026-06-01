@@ -216,6 +216,7 @@
   .extrato-provider small{color:var(--dim);}
   .extrato-provider.loading{color:var(--dim);}
   .extrato-provider.error{color:rgba(255,61,113,0.75);}
+  .extrato-provider.external{color:#ffbe00;}
   .extrato-ip-btn{font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:1px;padding:3px 8px;border:1px solid var(--border);background:transparent;color:var(--dim);cursor:pointer;white-space:nowrap;margin-left:8px;}
   .extrato-ip-btn:hover{border-color:var(--accent);color:var(--accent);}
   .extrato-count{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);margin-top:6px;letter-spacing:1px;}
@@ -1254,6 +1255,7 @@
       if (d.documento)   c1 += row('DOCUMENTO', d.documento);
       if (d.responsavel) c1 += row('RESPONSÁVEL', d.responsavel);
       if (d.pais)        c1 += row('PAÍS', d.pais, 'warn');
+      if (d.observacao)  c1 += row('OBSERVAÇÃO', d.observacao, d.externo ? 'warn' : '');
       if (d.criado)      c1 += row('CRIADO', d.criado);
       if (d.alterado)    c1 += row('ALTERADO', d.alterado);
       if (c1) cards += card('IDENTIFICAÇÃO', c1);
@@ -1422,7 +1424,8 @@
     const d = data && data.result ? data.result : {};
     const provider = String(d.titular || d.nome || d.responsavel || '').trim();
     const asn = String(d.asn || '').trim();
-    return { provider, asn };
+    const external = !!d.externo || /provedor externo/i.test(provider);
+    return { provider, asn, external };
   }
 
   function renderProviderLine(ip) {
@@ -1430,6 +1433,9 @@
     const id = ipProviderDomId(ip);
 
     if (cached && cached.provider) {
+      if (cached.external) {
+        return `<div class="extrato-provider external" id="${id}"><b>${htmlSafe(cached.provider)}</b></div>`;
+      }
       const asn = cached.asn ? ` <small>· ${htmlSafe(cached.asn)}</small>` : '';
       return `<div class="extrato-provider" id="${id}">PROVEDOR: <b>${htmlSafe(cached.provider)}</b>${asn}</div>`;
     }
@@ -1488,6 +1494,7 @@
       ipProviderCache[ip] = {
         provider: info.provider || info.asn,
         asn: info.provider ? info.asn : '',
+        external: !!info.external,
         ts: Date.now()
       };
       saveIPProviderCache();
