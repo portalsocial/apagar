@@ -467,7 +467,7 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function fetchJsonWithTimeout(url, timeoutMs = 25000) {
+async function fetchJsonWithTimeout(url, timeoutMs = 18000) {
   const controller = new AbortController();
   const started = Date.now();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -560,30 +560,6 @@ function rdapEndpoints(ip) {
   ];
 }
 
-// Gera prefixos IPv6 mais curtos para tentar quando o host completo não tem entrada RDAP.
-// Tenta /64, /48, /32 em ordem crescente de brevidade.
-function ipv6Prefixes(ip) {
-  if (!ip || !ip.includes(':')) return [];
-  const groups = ip.split(':');
-  const prefixes = [];
-  // /64: primeiros 4 grupos
-  if (groups.length >= 4) {
-    const p64 = groups.slice(0, 4).join(':') + '::';
-    if (p64 !== ip + '::') prefixes.push(p64);
-  }
-  // /48: primeiros 3 grupos
-  if (groups.length >= 3) {
-    const p48 = groups.slice(0, 3).join(':') + '::';
-    prefixes.push(p48);
-  }
-  // /32: primeiros 2 grupos
-  if (groups.length >= 2) {
-    const p32 = groups.slice(0, 2).join(':') + '::';
-    prefixes.push(p32);
-  }
-  return prefixes;
-}
-
 function tentativaResumo(r) {
   return {
     url: r.url,
@@ -604,23 +580,47 @@ function isTransientRdapError(r) {
     ['econnreset', 'etimedout', 'eai_again', 'enotfound', 'und_err_connect_timeout'].includes(code);
 }
 
-// Consulta em ordem de prioridade, com uma nova tentativa curta para falhas transitórias.
-// Mantém registro.br antes dos demais para IPs brasileiros e registra todas as tentativas.
+// Consulta primária em PARALELO (os dois primeiros endpoints ao mesmo tempo).
+// O mais rápido vence. Se ambos falharem, tenta os demais em sequência.
+// Isso reduz drasticamente o tempo de resposta para IPs brasileiros:
+// registro.br e lacnic são disparados juntos; o primeiro a responder é usado.
 async function queryRdapWithRace(endpoints) {
   const attempts = [];
+  if (!endpoints || !endpoints.length) return { ok: false, attempts };
 
-  for (const url of endpoints || []) {
+  const primary  = endpoints.slice(0, 2);
+  const fallback = endpoints.slice(2);
+
+  // Tenta os dois endpoints primários em paralelo — o primeiro válido vence.
+  const primaryResults = await Promise.allSettled(
+    primary.map(url =>
+      fetchJsonWithTimeout(url).then(r => {
+        if (!r.ok || !r.data) throw Object.assign(new Error(r.error || `HTTP ${r.status}`), { rdapResult: r });
+        return r;
+      })
+    )
+  );
+
+  for (const res of primaryResults) {
+    if (res.status === 'fulfilled' && res.value?.ok && res.value?.data) {
+      attempts.push(tentativaResumo(res.value));
+      return { ...res.value, attempts };
+    }
+    if (res.status === 'rejected') {
+      const r = res.reason?.rdapResult;
+      if (r) attempts.push(tentativaResumo(r));
+    }
+  }
+
+  // Fallback sequencial com retry para erros transitórios.
+  for (const url of fallback) {
     let r = await fetchJsonWithTimeout(url);
     attempts.push(tentativaResumo(r));
     if (r.ok && r.data) return { ...r, attempts };
 
-    // Uma única repetição por endpoint quando o erro for de rede/timeout.
-    // Isso evita falso negativo sem transformar a consulta em rajada.
     if (isTransientRdapError(r)) {
-      const retryDelay = url.includes('registro.br') ? 2000 : 900;
-      const retryTimeout = url.includes('registro.br') ? 35000 : 22000;
-      await delay(retryDelay);
-      r = await fetchJsonWithTimeout(url, retryTimeout);
+      await delay(600);
+      r = await fetchJsonWithTimeout(url, 15000);
       attempts.push({ ...tentativaResumo(r), retry: true });
       if (r.ok && r.data) return { ...r, attempts };
     }
@@ -757,32 +757,12 @@ async function consultarIpRdap(rawInput, opts = {}) {
   if (!opts.nocache && ipCache[ip]?.ok) return { ...ipCache[ip], cached: true };
 
   const endpoints = rdapEndpoints(ip);
-  let rdapResult = await queryRdapWithRace(endpoints);
-
-  // Fallback para IPv6: tenta blocos /64, /48, /32 se o host individual falhou
-  // (servidores RDAP frequentemente registram o bloco, não o host)
-  if ((!rdapResult || !rdapResult.ok) && ip.includes(':')) {
-    const prefixes = ipv6Prefixes(ip);
-    for (const prefix of prefixes) {
-      console.log('[INTEL] IPv6 fallback: tentando prefixo', prefix);
-      const prefixEndpoints = rdapEndpoints(prefix);
-      const prefixResult = await queryRdapWithRace(prefixEndpoints);
-      if (prefixResult && prefixResult.ok) {
-        rdapResult = prefixResult;
-        console.log('[INTEL] IPv6 fallback: sucesso com', prefix);
-        break;
-      }
-    }
-  }
+  const rdapResult = await queryRdapWithRace(endpoints);
 
   if (!rdapResult || !rdapResult.ok) {
     console.warn('[INTEL] RDAP não localizou IP:', ip, rdapResult?.attempts || []);
     const attempts = rdapResult?.attempts || [];
-    // Só marca como temporário se TODAS as falhas foram de rede/timeout.
-    // Se algum servidor retornou HTTP 4xx, o IP definitivamente não foi encontrado.
-    const networkFailures = attempts.filter(a => a.error && isTransientRdapError(a));
-    const http4xxFailures = attempts.filter(a => a.error && String(a.error).startsWith('HTTP 4'));
-    const transient = networkFailures.length > 0 && http4xxFailures.length === 0;
+    const transient = attempts.some(a => a.error && !String(a.error).startsWith('HTTP 4'));
     return {
       ok: false,
       temporary: transient,
