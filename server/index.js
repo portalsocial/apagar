@@ -519,18 +519,37 @@ async function fetchJsonWithTimeout(url, timeoutMs = 12000) {
 function rdapEndpoints(ip) {
   const eip = rdapPathIP(ip);
 
-  // Para IPs brasileiros, o Registro.br é a fonte mais completa para titular/reassign.
-  // Bootstrap/rdap.org podem retornar resposta genérica antes e impedir a chegada ao Registro.br.
+  // TESTE SOLICITADO: consultar somente o Registro.br para todos os IPs.
+  // Se o Registro.br não localizar o IP, o sistema sinaliza como provedor externo.
   return [
     `https://rdap.registro.br/ip/${eip}`,
-    `https://rdap.lacnic.net/rdap/ip/${eip}`,
-    `https://rdap.org/ip/${eip}`,
-    `https://rdap-bootstrap.arin.net/bootstrap/ip/${eip}`,
-    `https://rdap.arin.net/registry/ip/${eip}`,
-    `https://rdap.db.ripe.net/ip/${eip}`,
-    `https://rdap.apnic.net/ip/${eip}`,
-    `https://rdap.afrinic.net/rdap/ip/${eip}`,
   ];
+}
+
+function respostaProvedorExterno(ip, fonte, tentativas, motivo = 'IP não retornou dados no Registro.br') {
+  return {
+    ok: true,
+    result: {
+      ip,
+      asn: null,
+      titular: 'Provedor externo: consulte lacnic.net',
+      documento: null,
+      responsavel: null,
+      pais: 'EXTERNO/NAO-BR',
+      criado: null,
+      alterado: null,
+      fonte,
+      handle: null,
+      blocoInicio: null,
+      blocoFim: null,
+      tipo: null,
+      delegacoes: [],
+      contatos: [],
+      externo: true,
+      observacao: motivo
+    },
+    tentativas
+  };
 }
 
 function extrairRdap(data, ip, fonte) {
@@ -653,60 +672,52 @@ app.get('/api/ip/:ip', async (req, res) => {
   const ip = normalizarIP(req.params.ip);
   if (!ip) return res.status(400).json({ ok: false, error: 'IP inválido ou obrigatório' });
 
-  // Cache em memória: guarda apenas respostas positivas. Erro pode ser falha temporária de RDAP.
+  // Cache em memória: guarda respostas positivas, inclusive a marcação de provedor externo.
   if (ipCache[ip]?.ok) return res.json(ipCache[ip]);
 
   const tentativas = [];
-  let melhorResposta = null;
+  const urlRegistro = rdapEndpoints(ip)[0];
 
   try {
-    for (const url of rdapEndpoints(ip)) {
-      try {
-        const r = await fetchJsonWithTimeout(url);
-        if (!r.ok) {
-          tentativas.push(`${url} => HTTP/ERRO ${r.status}`);
-          continue;
-        }
+    const r = await fetchJsonWithTimeout(urlRegistro);
 
-        const result = extrairRdap(r.data, ip, r.url);
-        tentativas.push(`${url} => OK${result.titular ? ' titular=' + result.titular : ''}`);
-
-        // Retorna imediatamente quando encontrou titular/documento no Registro.br.
-        if (r.url.includes('rdap.registro.br') && temIdentificacaoUtil(result)) {
-          const resposta = { ok: true, result, tentativas };
-          ipCache[ip] = resposta;
-          return res.json(resposta);
-        }
-
-        // Guarda resposta útil, mas continua tentando para achar uma mais rica.
-        if (temIdentificacaoUtil(result) && !melhorResposta) {
-          melhorResposta = { ok: true, result, tentativas };
-        }
-
-        // Se a resposta não tem titular mas tem handle/ASN, ainda é melhor que nada.
-        if (!melhorResposta && (result.handle || result.asn)) {
-          melhorResposta = { ok: true, result, tentativas };
-        }
-      } catch(e) {
-        tentativas.push(`${url} => ${e.name === 'AbortError' ? 'timeout' : e.message}`);
-      }
+    if (!r.ok) {
+      const motivo = `Registro.br não retornou cadastro brasileiro para este IP. Status: ${r.status}`;
+      tentativas.push(`${urlRegistro} => HTTP/ERRO ${r.status}`);
+      const resposta = respostaProvedorExterno(ip, urlRegistro, tentativas, motivo);
+      ipCache[ip] = resposta;
+      return res.json(resposta);
     }
 
-    if (melhorResposta) {
-      ipCache[ip] = melhorResposta;
-      return res.json(melhorResposta);
+    const result = extrairRdap(r.data, ip, r.url);
+    tentativas.push(`${urlRegistro} => OK${result.titular ? ' titular=' + result.titular : ''}`);
+
+    if (temIdentificacaoUtil(result)) {
+      const resposta = { ok: true, result, tentativas };
+      ipCache[ip] = resposta;
+      return res.json(resposta);
     }
 
-    console.warn('[INTEL] RDAP não localizou IP:', ip, tentativas.join(' | '));
-    return res.json({
-      ok: false,
-      error: 'IP não encontrado em nenhum registro RDAP disponível no momento',
-      tentativas
-    });
+    const resposta = respostaProvedorExterno(
+      ip,
+      urlRegistro,
+      tentativas,
+      'Registro.br respondeu, mas não retornou titular/ASN/bloco útil para identificação.'
+    );
+    ipCache[ip] = resposta;
+    return res.json(resposta);
 
   } catch(e) {
-    console.error('[INTEL] Erro consulta IP:', e.message);
-    return res.json({ ok: false, error: e.message, tentativas });
+    const msg = e.name === 'AbortError' ? 'timeout' : e.message;
+    tentativas.push(`${urlRegistro} => ${msg}`);
+
+    // Em falha real de conexão, não marque como externo, porque pode ser indisponibilidade temporária.
+    console.error('[INTEL] Erro consulta IP Registro.br:', ip, msg);
+    return res.json({
+      ok: false,
+      error: `Falha temporária ao consultar Registro.br: ${msg}`,
+      tentativas
+    });
   }
 });
 
