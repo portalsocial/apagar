@@ -904,6 +904,9 @@
       // pois um erro antigo em localStorage pode manter "não localizado" após a correção.
       ipProviderCache = {};
       localStorage.removeItem(IP_PROVIDER_CACHE_KEY);
+      localStorage.removeItem('intel_ip_provider_cache_v1');
+      localStorage.removeItem('intel_ip_provider_cache_v2');
+      localStorage.removeItem('intel_ip_provider_cache_v3_provider_only');
       extratoRows = [];
       extratoFiltro = 'todos';
       extratoNumero = '';
@@ -1216,76 +1219,31 @@
     const title = document.getElementById('ipPanelTitle');
     const grid  = document.getElementById('grid');
 
-    // Mostra painel com loading
     grid.style.display = 'none';
     panel.style.display = 'block';
     title.textContent = `CONSULTANDO — ${ip}`;
-    body.innerHTML = '<div class="ip-loading" style="padding:20px">CONSULTANDO REGISTROS...</div>';
+    body.innerHTML = '<div class="ip-loading" style="padding:20px">CONSULTANDO REGISTRO.BR...</div>';
 
     try {
       const res = await fetch(`/api/ip/${encodeURIComponent(ip)}`);
       const data = await res.json();
 
-      if (!data.ok) {
-        const cached = getProviderCache(ip);
-        if (cached && cached.provider) {
-          title.textContent = `RESULTADO PARCIAL — ${ip}`;
-          let parcial = '';
-          parcial += row('IP', ip, 'accent');
-          parcial += row('PROVEDOR/TITULAR', cached.provider, 'highlight');
-          if (cached.asn) parcial += row('ASN', cached.asn, 'accent');
-          parcial += row('OBSERVAÇÃO', `Consulta detalhada RDAP não retornou neste momento: ${data.error || 'IP não encontrado'}`, 'warn');
-          body.innerHTML = card('IDENTIFICAÇÃO PARCIAL', parcial);
-          return;
-        }
-        body.innerHTML = `<div class="ip-error" style="padding:20px">ERRO: ${data.error || 'IP não encontrado'}</div>`;
+      if (!res.ok || !data.ok) {
+        body.innerHTML = `<div class="ip-error" style="padding:20px">ERRO: ${htmlSafe(data.error || 'falha na consulta')}</div>`;
         title.textContent = `ERRO — ${ip}`;
         return;
       }
 
-      const d = data.result;
-      title.textContent = `RESULTADO — ${ip}`;
+      const provedor = String(data.provedor || data.provider || data.result?.provedor || data.result?.titular || '').trim();
+      title.textContent = `PROVEDOR — ${ip}`;
 
-      let cards = '';
-
-      // Card 1 — Identificação
-      let c1 = '';
-      if (d.asn)         c1 += row('ASN', d.asn, 'accent');
-      if (d.titular)     c1 += row('TITULAR', d.titular, 'highlight');
-      if (d.documento)   c1 += row('DOCUMENTO', d.documento);
-      if (d.responsavel) c1 += row('RESPONSÁVEL', d.responsavel);
-      if (d.pais)        c1 += row('PAÍS', d.pais, 'warn');
-      if (d.observacao)  c1 += row('OBSERVAÇÃO', d.observacao, d.externo ? 'warn' : '');
-      if (d.criado)      c1 += row('CRIADO', d.criado);
-      if (d.alterado)    c1 += row('ALTERADO', d.alterado);
-      if (c1) cards += card('IDENTIFICAÇÃO', c1);
-
-      // Card 2 — Delegações
-      if (d.delegacoes && d.delegacoes.length > 0) {
-        let c2 = '';
-        d.delegacoes.forEach(del => {
-          c2 += row('BLOCO IP', del.bloco, 'accent');
-          (del.dns || []).forEach((ns, i) => { c2 += row(`SERVIDOR DNS ${i+1}`, ns); });
-        });
-        if (c2) cards += card('DELEGAÇÕES', c2);
-      }
-
-      // Cards de Contatos
-      (d.contatos || []).forEach(c => {
-        let cc = '';
-        if (c.id)       cc += row('ID', c.id, 'accent');
-        if (c.nome)     cc += row('NOME', c.nome, 'highlight');
-        if (c.email)    cc += row('EMAIL', c.email);
-        if (c.pais)     cc += row('PAÍS', c.pais, 'warn');
-        if (c.criado)   cc += row('CRIADO', c.criado);
-        if (c.alterado) cc += row('ALTERADO', c.alterado);
-        if (cc) cards += card(`CONTATO — ${c.id || ''}`, cc);
-      });
-
-      body.innerHTML = cards || '<div class="ip-loading" style="padding:20px">NENHUM DADO RETORNADO</div>';
+      body.innerHTML = provedor
+        ? card('PROVEDOR', `<div class="ip-card-val highlight" style="font-size:14px;line-height:1.6">${htmlSafe(provedor)}</div>`)
+        : '<div class="ip-loading" style="padding:20px">PROVEDOR NÃO LOCALIZADO</div>';
 
     } catch(e) {
-      body.innerHTML = `<div class="ip-error" style="padding:20px">ERRO: ${e.message}</div>`;
+      body.innerHTML = `<div class="ip-error" style="padding:20px">ERRO: ${htmlSafe(e.message)}</div>`;
+      title.textContent = `ERRO — ${ip}`;
     }
   }
 
@@ -1314,8 +1272,8 @@
 
   // Cache local para evitar consultar o mesmo IP repetidas vezes.
   // A consulta de provedor é feita em fila, com baixa concorrência, para não travar o painel.
-  const IP_PROVIDER_CACHE_KEY = 'intel_ip_provider_cache_v1';
-  const IP_PROVIDER_CONCURRENCY = 2;
+  const IP_PROVIDER_CACHE_KEY = 'intel_ip_provider_cache_v3_provider_only';
+  const IP_PROVIDER_CONCURRENCY = 1;
   let ipProviderCache = {};
   let ipProviderQueue = [];
   let ipProviderQueued = new Set();
@@ -1421,11 +1379,9 @@
   }
 
   function extractProviderInfo(data) {
-    const d = data && data.result ? data.result : {};
-    const provider = String(d.titular || d.nome || d.responsavel || '').trim();
-    const asn = String(d.asn || '').trim();
-    const external = !!d.externo || /provedor externo/i.test(provider);
-    return { provider, asn, external };
+    const provider = String(data?.provedor || data?.provider || data?.result?.provedor || data?.result?.titular || '').trim();
+    const external = /provedor externo/i.test(provider);
+    return { provider, external };
   }
 
   function renderProviderLine(ip) {
@@ -1433,18 +1389,15 @@
     const id = ipProviderDomId(ip);
 
     if (cached && cached.provider) {
-      if (cached.external) {
-        return `<div class="extrato-provider external" id="${id}"><b>${htmlSafe(cached.provider)}</b></div>`;
-      }
-      const asn = cached.asn ? ` <small>· ${htmlSafe(cached.asn)}</small>` : '';
-      return `<div class="extrato-provider" id="${id}">PROVEDOR: <b>${htmlSafe(cached.provider)}</b>${asn}</div>`;
+      const cls = cached.external ? 'extrato-provider external' : 'extrato-provider';
+      return `<div class="${cls}" id="${id}"><b>${htmlSafe(cached.provider)}</b></div>`;
     }
 
     if (cached && cached.error) {
-      return `<div class="extrato-provider error" id="${id}">PROVEDOR: não localizado</div>`;
+      return `<div class="extrato-provider error" id="${id}">falha temporária</div>`;
     }
 
-    return `<div class="extrato-provider loading" id="${id}">PROVEDOR: aguardando consulta</div>`;
+    return `<div class="extrato-provider loading" id="${id}">aguardando consulta</div>`;
   }
 
   function updateProviderLine(ip, text, cls='loading') {
@@ -1473,15 +1426,14 @@
       ipProviderActive++;
       fetchProviderForIP(ip).finally(() => {
         ipProviderActive--;
-        ipProviderQueued.delete(ip); // libera nova tentativa se houve falha temporária
-        // Pequena pausa para evitar rajada de requisições quando houver muitos IPs.
-        setTimeout(processProviderQueue, 300);
+        ipProviderQueued.delete(ip);
+        setTimeout(processProviderQueue, 3500);
       });
     }
   }
 
   async function fetchProviderForIP(ip) {
-    updateProviderLine(ip, 'PROVEDOR: consultando...', 'loading');
+    updateProviderLine(ip, 'consultando...', 'loading');
     try {
       const res = await fetch(`/api/ip/${encodeURIComponent(ip)}`);
       const data = await res.json();
@@ -1489,11 +1441,10 @@
       if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
       const info = extractProviderInfo(data);
-      if (!info.provider && !info.asn) throw new Error('Retorno RDAP sem titular/ASN');
+      if (!info.provider) throw new Error('Retorno sem provedor');
 
       ipProviderCache[ip] = {
-        provider: info.provider || info.asn,
-        asn: info.provider ? info.asn : '',
+        provider: info.provider,
         external: !!info.external,
         ts: Date.now()
       };
@@ -1502,7 +1453,7 @@
     } catch(e) {
       ipProviderCache[ip] = { error: true, message: e.message, ts: Date.now() };
       saveIPProviderCache();
-      updateProviderLine(ip, `PROVEDOR: falha temporária <small>· ${htmlSafe(e.message)}</small>`, 'error');
+      updateProviderLine(ip, `falha temporária <small>· ${htmlSafe(e.message)}</small>`, 'error');
     }
   }
 
