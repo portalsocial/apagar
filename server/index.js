@@ -40,6 +40,7 @@ let connectionStatus = 'disconnected';
 let profileCache = {};
 let chatsCache = [];
 let messagesCache = {};
+let ipCache = {};
 
 // Cache do token CelCoin
 let celcoinToken = null;
@@ -352,6 +353,7 @@ app.post('/api/photos/batch', async (req, res) => {
 
 app.post('/api/cache/clear', (req, res) => {
   profileCache = {};
+  ipCache = {};
   res.json({ ok: true });
 });
 
@@ -374,72 +376,148 @@ app.get('/api/chats/:jid/messages', (req, res) => {
 });
 
 
-app.get('/api/ip/:ip', async (req, res) => {
-  const ip = req.params.ip;
+
+function normalizarIP(input) {
+  if (!input) return '';
+  let ip = decodeURIComponent(String(input).trim());
+
+  // Aceita URLs como https://rdap.registro.br/ip/138.121.119.74 ou parâmetros ?id=...
+  const q = ip.match(/[?&]id=([^&\s]+)/);
+  if (q) ip = decodeURIComponent(q[1].trim());
+  const path = ip.match(/\/ip\/([^/?#\s]+)/i);
+  if (path) ip = decodeURIComponent(path[1].trim());
+
+  // IPv6 com porta: [2804:...:c701]:52386
+  const ipv6ComPorta = ip.match(/^\[([^\]]+)\](?::\d+)?$/);
+  if (ipv6ComPorta) return ipv6ComPorta[1];
+
+  // IPv4 com porta: 138.121.119.74:52386
+  const ipv4ComPorta = ip.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/);
+  if (ipv4ComPorta) return ipv4ComPorta[1];
+
+  return ip;
+}
+
+function vcardValue(entity, field) {
+  const vcard = entity?.vcardArray?.[1] || [];
+  const item = vcard.find(v => v && v[0] === field);
+  return item ? item[3] : null;
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    // Tenta registro.br primeiro (IPs brasileiros), depois LACNIC, depois ARIN
-    const endpoints = [
-      `https://rdap.registro.br/ip/${ip}`,
-      `https://rdap.lacnic.net/rdap/ip/${ip}`,
-      `https://rdap.arin.net/registry/ip/${ip}`,
-    ];
+    const r = await fetch(url, {
+      headers: { Accept: 'application/rdap+json, application/json' },
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+    if (!r.ok) return { ok: false, status: r.status, url };
+    return { ok: true, data: await r.json(), url };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function rdapEndpoints(ip) {
+  const eip = encodeURIComponent(ip);
+  return [
+    // Bootstrap tenta direcionar para o registro correto conforme a delegação global do IP.
+    `https://rdap-bootstrap.arin.net/bootstrap/ip/${eip}`,
+    `https://rdap.org/ip/${eip}`,
+    // Brasil/LACNIC continuam como fontes prioritárias práticas para os extratos analisados.
+    `https://rdap.registro.br/ip/${eip}`,
+    `https://rdap.lacnic.net/rdap/ip/${eip}`,
+    `https://rdap.arin.net/registry/ip/${eip}`,
+    `https://rdap.db.ripe.net/ip/${eip}`,
+    `https://rdap.apnic.net/ip/${eip}`,
+    `https://rdap.afrinic.net/rdap/ip/${eip}`,
+  ];
+}
+
+app.get('/api/ip/:ip', async (req, res) => {
+  const ip = normalizarIP(req.params.ip);
+  if (!ip) return res.status(400).json({ ok: false, error: 'IP obrigatório' });
+
+  // Cache em memória: guarda apenas respostas positivas. Erro pode ser falha temporária de RDAP.
+  if (ipCache[ip]?.ok) return res.json(ipCache[ip]);
+
+  try {
+    const endpoints = rdapEndpoints(ip);
 
     let data = null;
+    let fonte = null;
+    const tentativas = [];
+
     for (const url of endpoints) {
       try {
-        const r = await fetch(url, { headers: { Accept: 'application/rdap+json' } });
-        if (r.ok) { data = await r.json(); break; }
-      } catch(e) {}
+        const r = await fetchJsonWithTimeout(url);
+        if (r.ok) {
+          data = r.data;
+          fonte = r.url;
+          break;
+        }
+        tentativas.push(`${url} => HTTP ${r.status}`);
+      } catch(e) {
+        tentativas.push(`${url} => ${e.name === 'AbortError' ? 'timeout' : e.message}`);
+      }
     }
 
-    if (!data) return res.json({ ok: false, error: 'IP não encontrado em nenhum registro' });
+    if (!data) {
+      console.warn('[INTEL] RDAP não localizou IP:', ip, tentativas.join(' | '));
+      return res.json({ ok: false, error: 'IP não encontrado em nenhum registro RDAP disponível no momento' });
+    }
 
-    // Extrai ASN
     const asn = data.arin_originas0_asns?.[0]
       || data.autnums?.[0]?.handle
+      || data.handle?.match(/AS\d+/i)?.[0]
       || null;
 
-    // Extrai entidades
-    let titular = null, documento = null, responsavel = null, pais = null;
-    let criado = null, alterado = null;
+    let titular = null;
+    let documento = null;
+    let responsavel = null;
+    let pais = data.country || null;
+    let criado = null;
+    let alterado = null;
     const contatos = [];
 
-    // Datas do objeto principal
     (data.events || []).forEach(ev => {
       if (ev.eventAction === 'registration') criado = ev.eventDate?.split('T')[0];
       if (ev.eventAction === 'last changed') alterado = ev.eventDate?.split('T')[0];
     });
 
-    // Processa entidades
-    const processEntity = (entity, tipo) => {
-      const vcard = entity.vcardArray?.[1] || [];
-      const nome = vcard.find(v => v[0] === 'fn')?.[3] || null;
-      const email = vcard.find(v => v[0] === 'email')?.[3] || null;
-      const org = vcard.find(v => v[0] === 'org')?.[3] || null;
-      const paisVal = vcard.find(v => v[0] === 'adr')?.[3]?.['country-name'] || null;
+    const processEntity = (entity) => {
+      const nome = vcardValue(entity, 'fn');
+      const org = vcardValue(entity, 'org');
+      const email = vcardValue(entity, 'email');
+      const adr = vcardValue(entity, 'adr');
+      const paisVal = adr && typeof adr === 'object' ? adr['country-name'] : null;
+      const roles = entity.roles || [];
 
-      // Documento (CNPJ/CPF nos remarks ou publicIds)
       let doc = null;
-      (entity.publicIds || []).forEach(pid => { if (pid.identifier) doc = pid.identifier; });
+      (entity.publicIds || []).forEach(pid => {
+        if (pid.identifier) doc = pid.identifier;
+      });
 
-      let entCriado = null, entAlterado = null;
+      let entCriado = null;
+      let entAlterado = null;
       (entity.events || []).forEach(ev => {
         if (ev.eventAction === 'registration') entCriado = ev.eventDate?.split('T')[0];
         if (ev.eventAction === 'last changed') entAlterado = ev.eventDate?.split('T')[0];
       });
 
-      const roles = entity.roles || [];
-      if (roles.includes('registrant')) {
-        titular = org || nome;
-        documento = doc;
-        responsavel = nome;
-        pais = paisVal;
-        if (!criado && entCriado) criado = entCriado;
-        if (!alterado && entAlterado) alterado = entAlterado;
+      // Preferência: entidade registrante. Fallback: primeira entidade com org/fn.
+      if (roles.includes('registrant') || (!titular && (org || nome))) {
+        titular = titular || org || nome;
+        documento = documento || doc;
+        responsavel = responsavel || nome || org;
+        pais = pais || paisVal;
+        criado = criado || entCriado;
+        alterado = alterado || entAlterado;
       }
 
-      // Contatos (abuse, technical, administrative)
-      if (roles.some(r => ['abuse','technical','administrative','noc'].includes(r))) {
+      if (roles.some(r => ['abuse', 'technical', 'administrative', 'noc'].includes(r))) {
         contatos.push({
           id: entity.handle || '',
           nome: nome || org,
@@ -450,52 +528,53 @@ app.get('/api/ip/:ip', async (req, res) => {
         });
       }
 
-      // Processa sub-entidades
-      (entity.entities || []).forEach(sub => processEntity(sub, 'sub'));
+      (entity.entities || []).forEach(processEntity);
     };
 
-    (data.entities || []).forEach(e => processEntity(e, 'root'));
+    (data.entities || []).forEach(processEntity);
 
-    // Delegações (nameservers / subnets)
+    // Últimos fallbacks para reduzir retorno vazio.
+    titular = titular || data.name || data.handle || null;
+    responsavel = responsavel || titular;
+
     const delegacoes = [];
     (data.networks || data.ips || []).forEach(net => {
       if (net.handle) {
-        const dns = (net.nameservers || []).map(ns => ns.ldhName || ns.unicodeName || '');
+        const dns = (net.nameservers || []).map(ns => ns.ldhName || ns.unicodeName || '').filter(Boolean);
         delegacoes.push({ bloco: net.handle, dns });
       }
     });
 
-    // Tenta extrair bloco do próprio objeto
     if (delegacoes.length === 0 && data.handle) {
-      const dns = (data.nameservers || []).map(ns => ns.ldhName || ns.unicodeName || '');
+      const dns = (data.nameservers || []).map(ns => ns.ldhName || ns.unicodeName || '').filter(Boolean);
       delegacoes.push({ bloco: data.handle, dns });
     }
 
-    // Tenta pegar país do ipVersion ou endereço
-    if (!pais && data.country) pais = data.country;
-
-    // Tenta pegar ASN do ipNetwork
-    const asnFinal = asn || (data.handle?.startsWith('AS') ? data.handle : null);
-
-    res.json({
+    const resposta = {
       ok: true,
       result: {
         ip,
-        asn: asnFinal,
+        asn,
         titular,
         documento,
         responsavel,
         pais,
         criado,
         alterado,
+        fonte,
         delegacoes,
         contatos: contatos.filter(c => c.nome || c.email)
       }
-    });
+    };
+
+    ipCache[ip] = resposta;
+    res.json(resposta);
 
   } catch(e) {
     console.error('[INTEL] Erro consulta IP:', e.message);
-    res.json({ ok: false, error: e.message });
+    const resposta = { ok: false, error: e.message };
+    ipCache[ip] = resposta;
+    res.json(resposta);
   }
 });
 
