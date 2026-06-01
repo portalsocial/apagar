@@ -3,7 +3,6 @@ const QRCode = require('qrcode');
 const path = require('path');
 const pino = require('pino');
 const fs = require('fs');
-const net = require('net');
 
 // Captura erros globais para evitar que o servidor encerre
 process.on('uncaughtException', (err) => {
@@ -41,7 +40,6 @@ let connectionStatus = 'disconnected';
 let profileCache = {};
 let chatsCache = [];
 let messagesCache = {};
-let ipCache = {};
 
 // Cache do token CelCoin
 let celcoinToken = null;
@@ -354,7 +352,6 @@ app.post('/api/photos/batch', async (req, res) => {
 
 app.post('/api/cache/clear', (req, res) => {
   profileCache = {};
-  ipCache = {};
   res.json({ ok: true });
 });
 
@@ -377,417 +374,128 @@ app.get('/api/chats/:jid/messages', (req, res) => {
 });
 
 
-
-
-function safeDecode(v) {
-  try { return decodeURIComponent(v); } catch (_) { return v; }
-}
-
-function limparPontas(v) {
-  return String(v || '')
-    .trim()
-    .replace(/^[<("'`]+/, '')
-    .replace(/[>)"'`,;]+$/, '')
-    .trim();
-}
-
-function normalizarIP(input) {
-  if (!input) return '';
-
-  let ip = limparPontas(safeDecode(String(input)));
-
-  // Aceita URLs como https://rdap.registro.br/ip/138.121.119.74,
-  // https://rdap.registro.br/ip/2804:f50::/32 ou parâmetros ?id=...
-  const q = ip.match(/[?&](?:id|ip)=([^&#\s]+)/i);
-  if (q) ip = limparPontas(safeDecode(q[1]));
-
-  const pathMatch = ip.match(/\/(?:rdap\/)?ip\/([^?#\s]+)/i);
-  if (pathMatch) ip = limparPontas(safeDecode(pathMatch[1]));
-
-  // Remove prefixo textual comum em planilhas/logs.
-  ip = ip.replace(/^ip\s*[:=]\s*/i, '').trim();
-
-  // IPv6 com porta: [2804:...:c701]:52386
-  const ipv6ComPorta = ip.match(/^\[([^\]]+)\](?::\d{1,5})?$/);
-  if (ipv6ComPorta) ip = ipv6ComPorta[1];
-
-  // IPv4 com porta: 138.121.119.74:52386
-  const ipv4ComPorta = ip.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::\d{1,5})?$/);
-  if (ipv4ComPorta) ip = ipv4ComPorta[1];
-
-  // IPv6 sem colchetes, mas com porta indevidamente adicionada ao final.
-  // Só corta quando há 9+ blocos; com 8 blocos pode ser IPv6 válido.
-  if (ip.includes(':') && !ip.includes('/')) {
-    const parts = ip.split(':');
-    const last = parts[parts.length - 1];
-    const maybePort = /^\d{1,5}$/.test(last) && Number(last) >= 1 && Number(last) <= 65535;
-    if (!ip.includes('::') && parts.length > 8 && maybePort) {
-      const semPorta = parts.slice(0, -1).join(':');
-      if (net.isIP(semPorta) === 6) ip = semPorta;
-    }
-  }
-
-  // Mantém CIDR, pois o RDAP do Registro.br aceita bloco como 177.154.23.0/24.
-  const [addr, cidr] = ip.split('/');
-  if (cidr !== undefined) {
-    const n = Number(cidr);
-    if (!Number.isInteger(n)) return '';
-    const version = net.isIP(addr);
-    if ((version === 4 && n >= 0 && n <= 32) || (version === 6 && n >= 0 && n <= 128)) {
-      return `${addr}/${n}`;
-    }
-    return '';
-  }
-
-  return net.isIP(ip) ? ip : '';
-}
-
-function rdapPathIP(ip) {
-  // Colon em IPv6 pode ficar literal no path; slash de CIDR precisa ser codificado.
-  return encodeURIComponent(ip).replace(/%3A/gi, ':');
-}
-
-function vcardValue(entity, field) {
-  const vcard = entity?.vcardArray?.[1] || [];
-  const item = vcard.find(v => Array.isArray(v) && String(v[0] || '').toLowerCase() === String(field).toLowerCase());
-  if (!item) return null;
-
-  const value = item[3];
-  if (Array.isArray(value)) return value.filter(Boolean).join(', ');
-  if (value && typeof value === 'object') {
-    return value['country-name'] || value.label || Object.values(value).filter(Boolean).join(', ') || null;
-  }
-  return value ?? null;
-}
-
-function entityDisplayName(entity) {
-  const org = vcardValue(entity, 'org');
-  const fn = vcardValue(entity, 'fn');
-  const kind = String(vcardValue(entity, 'kind') || '').toLowerCase();
-
-  // No RDAP do Registro.br, empresas costumam vir como kind=org e nome no fn.
-  if (org) return String(org).trim();
-  if (fn) return String(fn).trim();
-  return entity?.handle || null;
-}
-
-function entityCountry(entity) {
-  const adr = vcardValue(entity, 'adr');
-  if (!adr) return null;
-  if (typeof adr === 'string') {
-    const parts = adr.split(',').map(s => s.trim()).filter(Boolean);
-    return parts[parts.length - 1] || null;
-  }
-  return null;
-}
-
-function eventDate(obj, action) {
-  const ev = (obj?.events || []).find(e => e.eventAction === action);
-  return ev?.eventDate ? String(ev.eventDate).split('T')[0] : null;
-}
-
-async function fetchJsonWithTimeout(url, timeoutMs = 12000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+app.get('/api/ip/:ip', async (req, res) => {
+  const ip = req.params.ip;
   try {
-    const r = await fetch(url, {
-      headers: {
-        Accept: 'application/rdap+json, application/json',
-        'User-Agent': 'WhatsApp-Intel-RDAP/1.0'
-      },
-      redirect: 'follow',
-      signal: controller.signal,
-    });
+    // Tenta registro.br primeiro (IPs brasileiros), depois LACNIC, depois ARIN
+    const endpoints = [
+      `https://rdap.registro.br/ip/${ip}`,
+      `https://rdap.lacnic.net/rdap/ip/${ip}`,
+      `https://rdap.arin.net/registry/ip/${ip}`,
+    ];
 
     let data = null;
-    try { data = await r.json(); } catch (_) {}
-
-    if (!r.ok) return { ok: false, status: r.status, url, data };
-    if (!data || typeof data !== 'object') return { ok: false, status: 'json-invalido', url, data };
-
-    // Evita aceitar como "sucesso" um corpo RDAP de erro ou uma resposta sem objeto útil.
-    if (data.errorCode || data.title === 'Not Found') {
-      return { ok: false, status: data.errorCode || data.title, url, data };
+    for (const url of endpoints) {
+      try {
+        const r = await fetch(url, { headers: { Accept: 'application/rdap+json' } });
+        if (r.ok) { data = await r.json(); break; }
+      } catch(e) {}
     }
 
-    return { ok: true, data, url };
-  } finally {
-    clearTimeout(timer);
-  }
-}
+    if (!data) return res.json({ ok: false, error: 'IP não encontrado em nenhum registro' });
 
-function rdapEndpoints(ip) {
-  const eip = rdapPathIP(ip);
-
-  // TESTE SOLICITADO: consultar somente o Registro.br para todos os IPs.
-  // Se o Registro.br não localizar o IP, o sistema sinaliza como provedor externo.
-  return [
-    `https://rdap.registro.br/ip/${eip}`,
-  ];
-}
-
-function respostaProvedorExterno(ip, fonte, tentativas, motivo = 'IP não retornou dados no Registro.br') {
-  return {
-    ok: true,
-    result: {
-      ip,
-      asn: null,
-      titular: 'Provedor externo: consulte lacnic.net',
-      documento: null,
-      responsavel: null,
-      pais: 'EXTERNO/NAO-BR',
-      criado: null,
-      alterado: null,
-      fonte,
-      handle: null,
-      blocoInicio: null,
-      blocoFim: null,
-      tipo: null,
-      delegacoes: [],
-      contatos: [],
-      externo: true,
-      observacao: motivo
-    },
-    tentativas
-  };
-}
-
-
-function extrairSomenteProvedorRegistroBR(data) {
-  const candidatos = [];
-
-  const visitar = (entity, depth = 0) => {
-    if (!entity) return;
-
-    const roles = Array.isArray(entity.roles)
-      ? entity.roles.map(r => String(r).toLowerCase())
-      : [];
-
-    const fn = vcardValue(entity, 'fn');
-    const org = vcardValue(entity, 'org');
-    const kind = String(vcardValue(entity, 'kind') || '').toLowerCase();
-    const nome = String(fn || org || '').trim();
-
-    if (nome) {
-      let score = 0;
-      if (roles.includes('registrant')) score += 100;
-      if (kind === 'org') score += 30;
-      if ((entity.publicIds || []).some(pid => String(pid.type || '').toLowerCase() === 'cnpj')) score += 20;
-      if (roles.includes('administrative')) score += 10;
-      if (roles.includes('technical')) score -= 10;
-      if (roles.includes('abuse')) score -= 30;
-      if (kind === 'individual') score -= 20;
-      score -= depth;
-
-      candidatos.push({ score, nome });
-    }
-
-    (entity.entities || []).forEach(child => visitar(child, depth + 1));
-  };
-
-  (data.entities || []).forEach(entity => visitar(entity, 0));
-  candidatos.sort((a, b) => b.score - a.score);
-
-  return candidatos[0]?.nome || null;
-}
-
-function extrairRdap(data, ip, fonte) {
-  const asn = data.nicbr_autnum
-    ? `AS${data.nicbr_autnum}`
-    : (data.arin_originas0_asns?.[0]
+    // Extrai ASN
+    const asn = data.arin_originas0_asns?.[0]
       || data.autnums?.[0]?.handle
-      || data.handle?.match(/AS\d+/i)?.[0]
-      || null);
+      || null;
 
-  let pais = data.country || null;
-  let criado = eventDate(data, 'registration');
-  let alterado = eventDate(data, 'last changed');
-  const contatos = [];
-  const candidatos = [];
+    // Extrai entidades
+    let titular = null, documento = null, responsavel = null, pais = null;
+    let criado = null, alterado = null;
+    const contatos = [];
 
-  const processEntity = (entity, depth = 0) => {
-    if (!entity) return;
-
-    const nome = entityDisplayName(entity);
-    const email = vcardValue(entity, 'email');
-    const roles = Array.isArray(entity.roles) ? entity.roles.map(r => String(r).toLowerCase()) : [];
-    const doc = (entity.publicIds || []).map(pid => pid.identifier).filter(Boolean)[0] || null;
-    const entCriado = eventDate(entity, 'registration');
-    const entAlterado = eventDate(entity, 'last changed');
-    const paisVal = entityCountry(entity);
-    const legalRepresentative = entity.legalRepresentative || entity.nicbr_responsible || null;
-
-    let score = 0;
-    if (roles.includes('registrant')) score += 100;
-    if (roles.includes('administrative')) score += 40;
-    if (roles.includes('technical')) score += 25;
-    if (roles.includes('abuse')) score -= 20;
-    if (doc) score += 15;
-    if (nome) score += 5;
-    score -= depth;
-
-    if (nome || doc || legalRepresentative) {
-      candidatos.push({
-        score,
-        roles,
-        nome,
-        documento: doc,
-        responsavel: legalRepresentative || null,
-        pais: paisVal,
-        criado: entCriado,
-        alterado: entAlterado
-      });
-    }
-
-    if (roles.some(r => ['abuse', 'technical', 'administrative', 'noc'].includes(r))) {
-      contatos.push({
-        id: entity.handle || '',
-        tipo: roles.join(', '),
-        nome,
-        email,
-        pais: paisVal,
-        criado: entCriado,
-        alterado: entAlterado
-      });
-    }
-
-    (entity.entities || []).forEach(child => processEntity(child, depth + 1));
-  };
-
-  (data.entities || []).forEach(entity => processEntity(entity, 0));
-
-  candidatos.sort((a, b) => b.score - a.score);
-  const principal = candidatos[0] || {};
-
-  const titular = principal.nome || data.name || data.handle || null;
-  const documento = principal.documento || null;
-  const responsavel = principal.responsavel || principal.nome || titular || null;
-  pais = pais || principal.pais || null;
-  criado = criado || principal.criado || null;
-  alterado = alterado || principal.alterado || null;
-
-  const delegacoes = [];
-  (data.networks || data.ips || []).forEach(netw => {
-    if (netw.handle) {
-      const dns = (netw.nameservers || []).map(ns => ns.ldhName || ns.unicodeName || '').filter(Boolean);
-      delegacoes.push({ bloco: netw.handle, dns });
-    }
-  });
-
-  if (delegacoes.length === 0 && data.handle) {
-    const dns = (data.nameservers || []).map(ns => ns.ldhName || ns.unicodeName || '').filter(Boolean);
-    delegacoes.push({
-      bloco: data.handle,
-      inicio: data.startAddress || null,
-      fim: data.endAddress || null,
-      dns
+    // Datas do objeto principal
+    (data.events || []).forEach(ev => {
+      if (ev.eventAction === 'registration') criado = ev.eventDate?.split('T')[0];
+      if (ev.eventAction === 'last changed') alterado = ev.eventDate?.split('T')[0];
     });
-  }
 
-  return {
-    ip,
-    asn,
-    titular,
-    documento,
-    responsavel,
-    pais,
-    criado,
-    alterado,
-    fonte,
-    handle: data.handle || null,
-    blocoInicio: data.startAddress || null,
-    blocoFim: data.endAddress || null,
-    tipo: data.type || null,
-    delegacoes,
-    contatos: contatos.filter(c => c.nome || c.email)
-  };
-}
+    // Processa entidades
+    const processEntity = (entity, tipo) => {
+      const vcard = entity.vcardArray?.[1] || [];
+      const nome = vcard.find(v => v[0] === 'fn')?.[3] || null;
+      const email = vcard.find(v => v[0] === 'email')?.[3] || null;
+      const org = vcard.find(v => v[0] === 'org')?.[3] || null;
+      const paisVal = vcard.find(v => v[0] === 'adr')?.[3]?.['country-name'] || null;
 
-function temIdentificacaoUtil(result) {
-  return !!(result?.titular || result?.documento || result?.asn || result?.handle);
-}
+      // Documento (CNPJ/CPF nos remarks ou publicIds)
+      let doc = null;
+      (entity.publicIds || []).forEach(pid => { if (pid.identifier) doc = pid.identifier; });
 
+      let entCriado = null, entAlterado = null;
+      (entity.events || []).forEach(ev => {
+        if (ev.eventAction === 'registration') entCriado = ev.eventDate?.split('T')[0];
+        if (ev.eventAction === 'last changed') entAlterado = ev.eventDate?.split('T')[0];
+      });
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+      const roles = entity.roles || [];
+      if (roles.includes('registrant')) {
+        titular = org || nome;
+        documento = doc;
+        responsavel = nome;
+        pais = paisVal;
+        if (!criado && entCriado) criado = entCriado;
+        if (!alterado && entAlterado) alterado = entAlterado;
+      }
 
-function ehNaoEncontradoRegistro(r) {
-  const status = Number(r?.status);
-  const statusStr = String(r?.status || '').toLowerCase();
-  const data = r?.data || {};
-  const errorCode = Number(data.errorCode);
-  const title = String(data.title || data.description || '').toLowerCase();
-
-  return status === 404 || errorCode === 404 || statusStr === '404' || title.includes('not found') || title.includes('não encontrado') || title.includes('nao encontrado');
-}
-
-function ehFalhaTemporariaRegistro(r) {
-  const status = Number(r?.status);
-  if ([408, 425, 429, 500, 502, 503, 504].includes(status)) return true;
-  if (status >= 500) return true;
-  const statusStr = String(r?.status || '').toLowerCase();
-  return statusStr.includes('timeout') || statusStr.includes('json') || statusStr.includes('abort') || statusStr.includes('network');
-}
-
-app.get('/api/ip/:ip', async (req, res) => {
-  const ip = normalizarIP(req.params.ip);
-  if (!ip) return res.status(400).json({ ok: false, error: 'IP inválido ou obrigatório' });
-
-  // Cache em memória: agora guarda somente o nome do provedor.
-  if (ipCache[ip]?.ok) return res.json(ipCache[ip]);
-
-  const urlRegistro = `https://rdap.registro.br/ip/${rdapPathIP(ip)}`;
-  const atrasos = [0, 1500, 3500];
-
-  for (let tentativa = 0; tentativa < atrasos.length; tentativa++) {
-    if (atrasos[tentativa] > 0) await sleep(atrasos[tentativa]);
-
-    try {
-      const r = await fetchJsonWithTimeout(urlRegistro, 15000);
-
-      if (!r.ok) {
-        // Só classifica como externo quando o Registro.br declarou "não encontrado".
-        // Rate limit, timeout e 5xx continuam sendo falha temporária.
-        if (ehNaoEncontradoRegistro(r)) {
-          const resposta = { ok: true, provedor: 'Provedor externo: consulte lacnic.net' };
-          ipCache[ip] = resposta;
-          return res.json(resposta);
-        }
-
-        if (ehFalhaTemporariaRegistro(r) && tentativa < atrasos.length - 1) {
-          continue;
-        }
-
-        return res.json({
-          ok: false,
-          error: `Falha temporária ao consultar Registro.br. Status: ${r.status}`
+      // Contatos (abuse, technical, administrative)
+      if (roles.some(r => ['abuse','technical','administrative','noc'].includes(r))) {
+        contatos.push({
+          id: entity.handle || '',
+          nome: nome || org,
+          email,
+          pais: paisVal,
+          criado: entCriado,
+          alterado: entAlterado
         });
       }
 
-      const provedor = extrairSomenteProvedorRegistroBR(r.data);
+      // Processa sub-entidades
+      (entity.entities || []).forEach(sub => processEntity(sub, 'sub'));
+    };
 
-      if (provedor) {
-        const resposta = { ok: true, provedor };
-        ipCache[ip] = resposta;
-        return res.json(resposta);
+    (data.entities || []).forEach(e => processEntity(e, 'root'));
+
+    // Delegações (nameservers / subnets)
+    const delegacoes = [];
+    (data.networks || data.ips || []).forEach(net => {
+      if (net.handle) {
+        const dns = (net.nameservers || []).map(ns => ns.ldhName || ns.unicodeName || '');
+        delegacoes.push({ bloco: net.handle, dns });
       }
+    });
 
-      const resposta = { ok: true, provedor: 'Provedor não localizado no Registro.br' };
-      ipCache[ip] = resposta;
-      return res.json(resposta);
-
-    } catch(e) {
-      const msg = e.name === 'AbortError' ? 'timeout' : e.message;
-
-      if (tentativa < atrasos.length - 1) continue;
-
-      console.error('[INTEL] Erro consulta IP Registro.br:', ip, msg);
-      return res.json({
-        ok: false,
-        error: `Falha temporária ao consultar Registro.br: ${msg}`
-      });
+    // Tenta extrair bloco do próprio objeto
+    if (delegacoes.length === 0 && data.handle) {
+      const dns = (data.nameservers || []).map(ns => ns.ldhName || ns.unicodeName || '');
+      delegacoes.push({ bloco: data.handle, dns });
     }
+
+    // Tenta pegar país do ipVersion ou endereço
+    if (!pais && data.country) pais = data.country;
+
+    // Tenta pegar ASN do ipNetwork
+    const asnFinal = asn || (data.handle?.startsWith('AS') ? data.handle : null);
+
+    res.json({
+      ok: true,
+      result: {
+        ip,
+        asn: asnFinal,
+        titular,
+        documento,
+        responsavel,
+        pais,
+        criado,
+        alterado,
+        delegacoes,
+        contatos: contatos.filter(c => c.nome || c.email)
+      }
+    });
+
+  } catch(e) {
+    console.error('[INTEL] Erro consulta IP:', e.message);
+    res.json({ ok: false, error: e.message });
   }
 });
 
