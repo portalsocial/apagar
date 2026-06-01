@@ -229,16 +229,12 @@
   .extrato-filter-btn.alvo.active{background:rgba(57,255,20,0.07);}
   .extrato-filter-btn.interlocutor{border-color:rgba(255,204,0,0.4);color:#ffcc00;}
   .extrato-filter-btn.interlocutor.active{background:rgba(255,204,0,0.07);}
-  .extrato-filter-btn.ipcomum{border-color:rgba(255,190,0,0.55);color:#ffbe00;}
-  .extrato-filter-btn.ipcomum.active{background:rgba(255,190,0,0.08);box-shadow:0 0 14px rgba(255,190,0,0.12);}
   .extrato-search-ip{background:transparent;border:1px solid var(--border);color:var(--fg);font-family:'Share Tech Mono',monospace;font-size:10px;padding:6px 10px;flex:1;min-width:140px;outline:none;}
   .extrato-search-ip:focus{border-color:var(--accent);}
   .extrato-select{background:var(--bg2);border:1px solid var(--border);color:var(--fg);font-family:'Share Tech Mono',monospace;font-size:9px;padding:6px 10px;cursor:pointer;outline:none;letter-spacing:1px;min-width:170px;}
   .extrato-select:focus{border-color:var(--accent);}
   .extrato-tag-alvo{font-size:7px;padding:1px 5px;background:rgba(57,255,20,0.1);color:#39ff14;border:1px solid rgba(57,255,20,0.3);margin-left:4px;}
   .extrato-tag-interlocutor{font-size:7px;padding:1px 5px;background:rgba(255,204,0,0.1);color:#ffcc00;border:1px solid rgba(255,204,0,0.3);margin-left:4px;}
-  .extrato-tag-ipcomum{font-size:7px;padding:1px 5px;background:rgba(255,190,0,0.1);color:#ffbe00;border:1px solid rgba(255,190,0,0.35);margin-left:4px;}
-  .extrato-common-line{font-family:'Share Tech Mono',monospace;font-size:7px;color:#ffbe00;margin-top:2px;letter-spacing:0.5px;}
   .extrato-stats{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);letter-spacing:1px;padding:8px 0;border-bottom:1px solid var(--border);margin-bottom:12px;}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -323,16 +319,12 @@
     <div class="extrato-panel" id="extratoPanel" style="display:none">
       <div class="extrato-header">
         <span class="extrato-title" id="extratoPanelTitle">IPs DO EXTRATO</span>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="extrato-close" id="btnExportIPs" onclick="exportIPsZip()" style="border-color:rgba(0,229,255,0.4);color:var(--accent)">⬇ EXPORTAR IPs .ZIP</button>
-          <button class="extrato-close" onclick="fecharExtrato()">✕ FECHAR</button>
-        </div>
+        <button class="extrato-close" onclick="fecharExtrato()">✕ FECHAR</button>
       </div>
       <div class="extrato-filters">
         <button class="extrato-filter-btn active" onclick="setExtratoFiltro('todos',this)">TODOS</button>
         <button class="extrato-filter-btn alvo" onclick="setExtratoFiltro('alvo',this)">● ALVO</button>
         <button class="extrato-filter-btn interlocutor" onclick="setExtratoFiltro('interlocutor',this)">● INTERLOCUTOR</button>
-        <button class="extrato-filter-btn ipcomum" onclick="setExtratoFiltro('ipcomum',this)">⛓ IP EM COMUM</button>
         <select class="extrato-select" id="extratoSelectAlvo" onchange="setExtratoAlvo(this.value)">
           <option value="">TODOS OS ALVOS</option>
         </select>
@@ -901,28 +893,6 @@
       allGroups = {};
       ipProviderQueue = [];
       ipProviderQueued = new Set();
-
-      // Limpa dados do extrato/importação e também o cache local de provedores.
-      // Cache negativo antigo é uma das causas de falso "PROVEDOR: não localizado".
-      ipProviderCache = {};
-      try { localStorage.removeItem(IP_PROVIDER_CACHE_KEY); } catch(e) {}
-      extratoRows = [];
-      extratoFiltro = 'todos';
-      extratoNumero = '';
-      extratoAlvo = '';
-      const extratoPanel = document.getElementById('extratoPanel');
-      const extratoGrid = document.getElementById('extratoGrid');
-      const extratoStats = document.getElementById('extratoStats');
-      const extratoSearch = document.getElementById('extratoSearchIP');
-      const extratoSelAlvo = document.getElementById('extratoSelectAlvo');
-      const extratoSelNum = document.getElementById('extratoSelectNum');
-      if (extratoPanel) extratoPanel.style.display = 'none';
-      if (extratoGrid) extratoGrid.innerHTML = '';
-      if (extratoStats) extratoStats.textContent = '';
-      if (extratoSearch) extratoSearch.value = '';
-      if (extratoSelAlvo) extratoSelAlvo.innerHTML = '<option value="">TODOS OS ALVOS</option>';
-      if (extratoSelNum) extratoSelNum.innerHTML = '<option value="">TODOS OS INTERLOCUTORES</option>';
-
       if (typeof allExtracted !== 'undefined') {
         Object.keys(allExtracted).forEach(k => delete allExtracted[k]);
       }
@@ -1209,8 +1179,7 @@
   setInterval(pollStatus, 2000);
 
   async function consultarIP() {
-    const rawIp = document.getElementById('ipInput').value.trim();
-    const ip = extrairIP(rawIp) || rawIp;
+    const ip = document.getElementById('ipInput').value.trim();
     if (!ip) return;
 
     const panel = document.getElementById('ipPanel');
@@ -1225,33 +1194,10 @@
     body.innerHTML = '<div class="ip-loading" style="padding:20px">CONSULTANDO REGISTROS...</div>';
 
     try {
-      const res = await fetch(`/api/ip?id=${encodeURIComponent(ip)}`);
+      const res = await fetch(`/api/ip/${encodeURIComponent(ip)}`);
       const data = await res.json();
 
-      // Aproveita o resultado da consulta manual para atualizar o cache do extrato.
-      // Isso resolve o caso em que fetchProviderForIP falhou temporariamente mas
-      // a consulta manual obteve resultado — o card do extrato passa a mostrar o provedor.
-      if (data.ok) {
-        const info = extractProviderInfo(data);
-        if (info.provider || info.asn) {
-          _saveProviderSuccess(ip, info);
-          const elProv = document.getElementById(ipProviderDomId(ip));
-          if (elProv) updateProviderLine(ip);
-        }
-      }
-
       if (!data.ok) {
-        const cached = getProviderCache(ip);
-        if (cached && cached.provider) {
-          title.textContent = `RESULTADO PARCIAL — ${ip}`;
-          let parcial = '';
-          parcial += row('IP', ip, 'accent');
-          parcial += row('PROVEDOR/TITULAR', cached.provider, 'highlight');
-          if (cached.asn) parcial += row('ASN', cached.asn, 'accent');
-          parcial += row('OBSERVAÇÃO', `Consulta detalhada RDAP não retornou neste momento: ${data.error || 'IP não encontrado'}`, 'warn');
-          body.innerHTML = card('IDENTIFICAÇÃO PARCIAL', parcial);
-          return;
-        }
         body.innerHTML = `<div class="ip-error" style="padding:20px">ERRO: ${data.error || 'IP não encontrado'}</div>`;
         title.textContent = `ERRO — ${ip}`;
         return;
@@ -1327,45 +1273,21 @@
 
   // Cache local para evitar consultar o mesmo IP repetidas vezes.
   // A consulta de provedor é feita em fila, com baixa concorrência, para não travar o painel.
-  const IP_PROVIDER_CACHE_KEY = 'intel_ip_provider_cache_v4';
-  const IP_PROVIDER_OLD_CACHE_KEYS = ['intel_ip_provider_cache_v1', 'intel_ip_provider_cache_v2', 'intel_ip_provider_cache_v3'];
+  const IP_PROVIDER_CACHE_KEY = 'intel_ip_provider_cache_v1';
   const IP_PROVIDER_CONCURRENCY = 2;
   let ipProviderCache = {};
   let ipProviderQueue = [];
   let ipProviderQueued = new Set();
   let ipProviderActive = 0;
 
-  function safeDecode(v) {
-    try { return decodeURIComponent(v); } catch(e) { return v; }
-  }
-
   function extrairIP(urlOuIp) {
     if (!urlOuIp) return null;
-    let s = safeDecode(String(urlOuIp).trim()).replace(/^['"]+|['"]+$/g, '').trim();
-
-    const m = s.match(/[?&](?:id|ip)=([^&\s]+)/);
-    if (m) s = safeDecode(m[1].trim());
-
-    const path = s.match(/\/ip\/([^/?#\s]+)/i);
-    if (path) s = safeDecode(path[1].trim());
-
-    // IPv6 com porta: [2804:...:c701]:52386
-    const bracket = s.match(/^\[([^\]]+)\](?::\d+)?$/);
+    const s = String(urlOuIp).trim();
+    const m = s.match(/[?&]id=([^&\s]+)/);
+    if (m) return m[1].trim();
+    const bracket = s.match(/\[([^\]]+)\]/);
     if (bracket) return bracket[1].trim();
-
-    // IPv4 com porta: 45.176.103.34:58268
-    const ipv4Porta = s.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/);
-    if (ipv4Porta) return ipv4Porta[1];
-
-    // IPv6 sem colchetes, inclusive formato com porta no final.
-    if (/^[0-9a-fA-F:.]+$/.test(s)) {
-      const parts = s.split(':');
-      if (parts.length === 9 && /^\d{2,6}$/.test(parts[8])) {
-        return parts.slice(0, 8).join(':');
-      }
-      return s;
-    }
-
+    if (/^[\d.:a-fA-F]+$/.test(s)) return s;
     return null;
   }
 
@@ -1392,8 +1314,6 @@
 
   function loadIPProviderCache() {
     try {
-      // Invalida caches antigos que continham muitos falsos negativos.
-      IP_PROVIDER_OLD_CACHE_KEYS.forEach(k => localStorage.removeItem(k));
       const raw = localStorage.getItem(IP_PROVIDER_CACHE_KEY);
       ipProviderCache = raw ? JSON.parse(raw) : {};
     } catch(e) {
@@ -1409,24 +1329,6 @@
     }
   }
 
-  function getProviderCache(ip) {
-    const cached = ipProviderCache[ip];
-    if (!cached) return null;
-
-    // Falha temporária não pode virar “não localizado”, mas também não pode ficar consultando em loop.
-    // Mantém um cooldown curto e depois permite nova tentativa.
-    if (cached.error) {
-      const retryAt = cached.retryAt || 0;
-      if (Date.now() >= retryAt) {
-        delete ipProviderCache[ip];
-        saveIPProviderCache();
-        return null;
-      }
-    }
-
-    return cached;
-  }
-
   function ipProviderDomId(ip) {
     return 'prov_' + String(ip || '').replace(/[^a-zA-Z0-9]/g, '_');
   }
@@ -1439,7 +1341,7 @@
   }
 
   function renderProviderLine(ip) {
-    const cached = getProviderCache(ip);
+    const cached = ipProviderCache[ip];
     const id = ipProviderDomId(ip);
 
     if (cached && cached.provider) {
@@ -1448,8 +1350,7 @@
     }
 
     if (cached && cached.error) {
-      const msg = cached.message ? ` <small>· ${htmlSafe(cached.message)}</small>` : '';
-      return `<div class="extrato-provider error" id="${id}">PROVEDOR: falha temporária${msg}</div>`;
+      return `<div class="extrato-provider error" id="${id}">PROVEDOR: não localizado</div>`;
     }
 
     return `<div class="extrato-provider loading" id="${id}">PROVEDOR: aguardando consulta</div>`;
@@ -1468,9 +1369,7 @@
 
   function scheduleProviderLookup(ips) {
     (ips || []).forEach(ip => {
-      if (!ip) return;
-      if (getProviderCache(ip)) return;
-      if (ipProviderQueued.has(ip)) return;
+      if (!ip || ipProviderCache[ip] || ipProviderQueued.has(ip)) return;
       ipProviderQueued.add(ip);
       ipProviderQueue.push(ip);
     });
@@ -1483,80 +1382,35 @@
       ipProviderActive++;
       fetchProviderForIP(ip).finally(() => {
         ipProviderActive--;
-        ipProviderQueued.delete(ip);
-        // Pausa maior para reduzir falso negativo por sobrecarga/rate limit do RDAP em consultas grandes.
-        setTimeout(processProviderQueue, 1500);
+        // Pequena pausa para evitar rajada de requisições quando houver muitos IPs.
+        setTimeout(processProviderQueue, 300);
       });
     }
   }
 
-  function formatRdapAttempts(data) {
-    const attempts = Array.isArray(data?.attempts) ? data.attempts : [];
-    if (!attempts.length) return data?.error || 'falha temporária';
-    const compact = attempts.slice(0, 3).map(a => {
-      const host = a.host || (() => { try { return new URL(a.url).hostname; } catch(e) { return 'rdap'; } })();
-      return `${host}: ${a.ok ? 'ok' : (a.status || a.code || a.error || 'falha')}`;
-    }).join(' | ');
-    return compact || data?.error || 'falha temporária';
-  }
-
   async function fetchProviderForIP(ip) {
     updateProviderLine(ip, 'PROVEDOR: consultando...', 'loading');
-
-    // Timeout de 35s no browser — evita espera indefinida se o servidor demorar muito.
-    const ctrl  = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 35000);
-
     try {
-      const res  = await fetch(`/api/ip?id=${encodeURIComponent(ip)}`, { signal: ctrl.signal });
+      const res = await fetch(`/api/ip/${encodeURIComponent(ip)}`);
       const data = await res.json();
 
-      if (!data.ok) throw new Error(formatRdapAttempts(data));
+      if (!data.ok) throw new Error(data.error || 'IP não localizado');
 
       const info = extractProviderInfo(data);
       if (!info.provider && !info.asn) throw new Error('Retorno sem titular/ASN');
 
-      _saveProviderSuccess(ip, info);
-
-      const el = document.getElementById(ipProviderDomId(ip));
-      if (el) {
-        updateProviderLine(ip);
-      } else if (document.getElementById('extratoPanel').style.display !== 'none') {
-        renderExtrato();
-      }
-    } catch(e) {
-      const msg = String(e.message || 'falha temporária').slice(0, 220);
-      // Cooldown de 2 minutos — curto o suficiente para recuperar de falhas transitórias.
       ipProviderCache[ip] = {
-        error: true,
-        temporary: true,
-        message: msg,
-        ts: Date.now(),
-        retryAt: Date.now() + (2 * 60 * 1000)
+        provider: info.provider || info.asn,
+        asn: info.provider ? info.asn : '',
+        ts: Date.now()
       };
       saveIPProviderCache();
-
-      const el = document.getElementById(ipProviderDomId(ip));
-      if (el) {
-        updateProviderLine(ip, `PROVEDOR: falha temporária <small>${htmlSafe(msg)}</small>`, 'error');
-      } else if (document.getElementById('extratoPanel').style.display !== 'none') {
-        renderExtrato();
-      }
-    } finally {
-      clearTimeout(timer);
+      updateProviderLine(ip);
+    } catch(e) {
+      ipProviderCache[ip] = { error: true, message: e.message, ts: Date.now() };
+      saveIPProviderCache();
+      updateProviderLine(ip, 'PROVEDOR: não localizado', 'error');
     }
-  }
-
-  // Salva resultado positivo no cache do extrato.
-  // Chamada tanto pelo fetchProviderForIP quanto pelo consultarIP (consulta manual),
-  // garantindo que o card do extrato atualize independente de onde veio o resultado.
-  function _saveProviderSuccess(ip, info) {
-    ipProviderCache[ip] = {
-      provider: info.provider || info.asn,
-      asn: info.provider ? info.asn : '',
-      ts: Date.now()
-    };
-    saveIPProviderCache();
   }
 
   loadIPProviderCache();
@@ -1604,52 +1458,12 @@
     return false;
   }
 
-  function buildCommonIPMap(baseRows = extratoRows) {
-    const map = {};
-    (baseRows || []).forEach(row => {
-      if (!row.ip) return;
-      if (!map[row.ip]) {
-        map[row.ip] = {
-          alvos: new Set(),
-          interlocutores: new Set(),
-          tipos: new Set(),
-          count: 0
-        };
-      }
-      map[row.ip].count++;
-      if (row.alvo) map[row.ip].alvos.add(row.alvo);
-      if (row.interlocutor) map[row.ip].interlocutores.add(row.interlocutor);
-      if (row.tipo) map[row.ip].tipos.add(row.tipo);
-    });
-    return map;
-  }
-
-  function isCommonIPInfo(info) {
-    if (!info) return false;
-    return info.alvos.size > 1 || info.interlocutores.size > 1 || info.tipos.size > 1;
-  }
-
-  function commonIPLabel(ip, commonMap) {
-    const info = commonMap?.[ip];
-    if (!isCommonIPInfo(info)) return '';
-    const parts = [];
-    if (info.alvos.size > 1) parts.push(`${info.alvos.size} alvos`);
-    if (info.interlocutores.size > 1) parts.push(`${info.interlocutores.size} interlocutores`);
-    if (info.tipos.size > 1) parts.push('alvo/interlocutor');
-    return parts.length ? parts.join(' · ') : 'cruzamento técnico';
-  }
-
   function getFilteredExtratoRows() {
     const searchVal = (document.getElementById('extratoSearchIP')?.value || '').trim();
-    const commonMap = buildCommonIPMap(extratoRows);
     return extratoRows.filter(row => {
       if (extratoAlvo && row.alvo !== extratoAlvo) return false;
       if (extratoNumero && row.interlocutor !== extratoNumero) return false;
-      if (extratoFiltro === 'ipcomum') {
-        if (!isCommonIPInfo(commonMap[row.ip])) return false;
-      } else if (extratoFiltro !== 'todos' && row.tipo !== extratoFiltro) {
-        return false;
-      }
+      if (extratoFiltro !== 'todos' && row.tipo !== extratoFiltro) return false;
       return extratoSearchMatch(row, searchVal);
     });
   }
@@ -1657,7 +1471,6 @@
   function renderExtrato() {
     const grid  = document.getElementById('extratoGrid');
     const stats = document.getElementById('extratoStats');
-    const commonMap = buildCommonIPMap(extratoRows);
     const rows  = getFilteredExtratoRows();
 
     const grouped = {};
@@ -1721,23 +1534,18 @@
             ? '<span class="extrato-tag-alvo">ALVO</span>'
             : '<span class="extrato-tag-interlocutor">INTERLOCUT.</span>'
         ).join('');
-        const commonLabel = commonIPLabel(ip, commonMap);
-        const commonTag = commonLabel ? '<span class="extrato-tag-ipcomum">IP COMUM</span>' : '';
 
         const details = [
           label,
           devs ? 'DEV: ' + devs : '',
           portas ? 'PORTA: ' + portas : '',
-          info.count + (info.count === 1 ? ' ocorrência' : ' ocorrências')
+          info.count + 'x'
         ].filter(Boolean).join(' · ');
 
         const providerLine = renderProviderLine(ip);
 
         const targetLine = alvosIp
           ? `<div style="font-family:'Share Tech Mono',monospace;font-size:7px;color:#39ff14;margin-top:2px">ALVO ${htmlSafe(alvosIp)}${invIp ? ' · ' + htmlSafe(invIp) : ''}</div>`
-          : '';
-        const commonLine = commonLabel
-          ? `<div class="extrato-common-line">IP EM COMUM: ${htmlSafe(commonLabel)}</div>`
           : '';
 
         ipRows += `
@@ -1746,12 +1554,10 @@
               <div style="display:flex;align-items:center;gap:4px">
                 <div class="extrato-ip-val ${cls}">${htmlSafe(ip)}</div>
                 ${tagHTML}
-                ${commonTag}
               </div>
               <div style="font-family:'Share Tech Mono',monospace;font-size:7px;color:var(--dim);margin-top:2px">${htmlSafe(details)}</div>
               ${providerLine}
               ${targetLine}
-              ${commonLine}
             </div>
             <button class="extrato-ip-btn" onclick="consultarIPExtrato('${jsStr(ip)}')">⊞ CONSULTAR</button>
           </div>`;
@@ -1767,9 +1573,8 @@
     });
 
     const alvosExibidos = new Set(rows.map(r => r.alvo).filter(Boolean));
-    const ipsComunsExibidos = new Set(rows.filter(r => isCommonIPInfo(commonMap[r.ip])).map(r => r.ip));
     grid.innerHTML  = html || '<div class="ip-loading" style="padding:20px">NENHUM IP ENCONTRADO</div>';
-    stats.textContent = `${totalCards} interlocutor(es) · ${totalIPs} IP(s) único(s) · ${alvosExibidos.size} alvo(s) exibido(s) · ${ipsComunsExibidos.size} IP(s) em comum`;
+    stats.textContent = `${totalCards} interlocutor(es) · ${totalIPs} IP(s) único(s) · ${alvosExibidos.size} alvo(s) exibido(s)`;
     setTimeout(() => scheduleProviderLookup([...ipsParaConsulta]), 80);
   }
 
@@ -1868,303 +1673,6 @@
     }
 
     input.value = '';
-  }
-
-  // Funções da galeria de IPs — definidas aqui e serializadas via .toString()
-  // para evitar qualquer problema de escape de strings ao embutir no HTML gerado.
-  function _ipGalleryRender() {
-    function esc(v) {
-      return String(v || '').replace(/[&<>"]/g, function(c) {
-        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];
-      });
-    }
-    function dp(v) {
-      var d = String(v || '').replace(/\D/g, '');
-      return d ? '+' + d : (String(v || '').trim() || '\u2014');
-    }
-    var cf = 'all';
-    window.setF = function(f, btn) {
-      cf = f;
-      document.querySelectorAll('.tb').forEach(function(b) { b.classList.remove('active'); });
-      btn.classList.add('active');
-      render();
-    };
-    function render() {
-      var q = document.getElementById('srch').value.toLowerCase().trim();
-      var filtered = DATA.filter(function(c) {
-        if (cf === 'alvo' && !c.tipos.includes('alvo')) return false;
-        if (cf === 'inter' && !c.tipos.includes('interlocutor')) return false;
-        if (cf === 'common' && !c.isCommon) return false;
-        if (cf === 'prov' && !c.provider) return false;
-        if (!q) return true;
-        var h = [c.ip, c.interlocutor].concat(c.alvos, c.investigados, c.devices, [c.provider || '', c.asn || '', c.commonLabel || '']).join(' ').toLowerCase();
-        return h.includes(q) || String(c.ip).includes(q);
-      });
-      document.getElementById('cl').innerHTML = 'Exibindo <b>' + filtered.length + '</b> de ' + DATA.length + ' registros';
-      var grid = document.getElementById('grid');
-      if (!filtered.length) {
-        grid.innerHTML = '<div class="empty"><div class="empty-big">SEM RESULTADOS</div>Nenhum IP corresponde ao filtro selecionado.</div>';
-        return;
-      }
-      grid.innerHTML = filtered.map(function(c, i) {
-        var delay = (i * 0.025).toFixed(3);
-        var ipCls = c.ipv6 ? 'ipv6' : '';
-        var commonCls = c.isCommon ? ' common' : '';
-        var badges = '';
-        if (c.tipos.includes('alvo'))          badges += '<span class="badge b-alvo">ALVO</span>';
-        if (c.tipos.includes('interlocutor'))  badges += '<span class="badge b-inter">INTERLOCUT.</span>';
-        if (c.isCommon)                        badges += '<span class="badge b-common">\u26d3 IP COMUM</span>';
-        if (c.ipv6)                            badges += '<span class="badge b-ipv6">IPv6</span>';
-        var prov = '';
-        if (c.provider) {
-          prov = '<div class="row"><div class="row-key">PROVEDOR</div><div class="row-val gold">' + esc(c.provider) + (c.asn ? '<span style="color:var(--dim);font-size:8px"> \u00b7 ' + esc(c.asn) + '</span>' : '') + '</div></div>';
-        } else if (c.providerError) {
-          prov = '<div class="row"><div class="row-key">PROVEDOR</div><div class="row-val err">n\u00e3o localizado</div></div>';
-        } else {
-          prov = '<div class="row"><div class="row-key">PROVEDOR</div><div class="row-val" style="color:var(--dim);font-style:italic">\u2014</div></div>';
-        }
-        var alvosStr = c.alvos.map(dp).join(', ') || '\u2014';
-        var invStr   = c.investigados.filter(Boolean).join(', ') || '\u2014';
-        var devStr   = c.devices.join(', ') || '\u2014';
-        var portStr  = c.portas.join(', ') || '\u2014';
-        var commonPart = c.isCommon ? '<div class="row"><div class="row-key">IPs EM COMUM</div><div class="row-val warn">' + esc(c.commonLabel) + '</div></div>' : '';
-        var invPart  = invStr !== '\u2014' ? '<div class="row"><div class="row-key">INVESTIGADO</div><div class="row-val acc">' + esc(invStr) + '</div></div>' : '';
-        var portPart = portStr !== '\u2014' ? '<div class="row"><div class="row-key">PORTA(S)</div><div class="row-val">' + esc(portStr) + '</div></div>' : '';
-        var countLbl = c.count + (c.count === 1 ? ' ocorr.' : ' ocorrs.');
-        return '<div class="card' + commonCls + '" style="animation-delay:' + delay + 's">'
-          + (c.isCommon ? '<div class="common-corner"></div>' : '')
-          + '<div class="card-head">'
-          +   '<div>'
-          +     '<div class="card-ip ' + ipCls + '">' + esc(c.ip) + '</div>'
-          +     '<div class="badge-row">' + badges + '</div>'
-          +   '</div>'
-          +   '<div style="font-family:\'Share Tech Mono\',monospace;font-size:9px;color:var(--dim);white-space:nowrap">' + countLbl + '</div>'
-          + '</div>'
-          + '<div class="card-body">'
-          +   prov
-          +   '<div class="row"><div class="row-key">ALVO(S)</div><div class="row-val hi">' + esc(alvosStr) + '</div></div>'
-          +   invPart
-          +   commonPart
-          +   '<hr class="divider">'
-          +   '<div class="row"><div class="row-key">DEVICE</div><div class="row-val">' + esc(devStr) + '</div></div>'
-          +   portPart
-          + '</div>'
-          + '<div class="card-num">INTERLOCUTOR: <b>' + dp(c.interlocutor) + '</b></div>'
-          + '</div>';
-      }).join('');
-    }
-    render();
-    document.getElementById('srch').addEventListener('input', render);
-  }
-
-  async function exportIPsZip() {
-    if (!extratoRows.length) { alert('Nenhum dado de extrato carregado.'); return; }
-
-    const btn = document.getElementById('btnExportIPs');
-    const originalText = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = 'AGUARDANDO PROVEDORES...';
-
-    // Aguarda até 8s para que consultas de provedor em andamento terminem
-    const waitStart = Date.now();
-    while (ipProviderActive > 0 && Date.now() - waitStart < 8000) {
-      await new Promise(r => setTimeout(r, 300));
-    }
-
-    btn.textContent = 'MONTANDO GALERIA...';
-
-    try {
-      const zip = new JSZip();
-
-      // ── Coleta todos os IPs únicos do extrato com seus metadados ──
-      const commonMap = buildCommonIPMap(extratoRows);
-
-      // Agrupa por interlocutor → ip → {dados}
-      const byNum = {};
-      extratoRows.forEach(row => {
-        const num = row.interlocutor || 'SEM_INTERLOCUTOR';
-        if (!byNum[num]) byNum[num] = { alvos: new Set(), investigados: new Set(), ips: {} };
-        byNum[num].alvos.add(row.alvo || '');
-        if (row.investigado && row.investigado !== '-') byNum[num].investigados.add(row.investigado);
-
-        if (!byNum[num].ips[row.ip]) {
-          byNum[num].ips[row.ip] = {
-            ip: row.ip,
-            count: 0,
-            tipos: new Set(),
-            devices: new Set(),
-            portas: new Set(),
-            alvos: new Set(),
-            investigados: new Set()
-          };
-        }
-        const inf = byNum[num].ips[row.ip];
-        inf.count++;
-        inf.tipos.add(row.tipo);
-        if (row.device) inf.devices.add(row.device);
-        if (row.porta)  inf.portas.add(row.porta);
-        if (row.alvo)   inf.alvos.add(row.alvo);
-        if (row.investigado && row.investigado !== '-') inf.investigados.add(row.investigado);
-      });
-
-      // Serializa para JSON seguro para embutir na galeria
-      const cards = [];
-      Object.entries(byNum).forEach(([num, dados]) => {
-        Object.values(dados.ips).forEach(inf => {
-          const cached = getProviderCache(inf.ip);
-          const common = commonMap[inf.ip];
-          cards.push({
-            interlocutor: num,
-            ip: inf.ip,
-            ipv6: isIPv6(inf.ip),
-            count: inf.count,
-            tipos: [...inf.tipos],
-            devices: [...inf.devices],
-            portas: [...inf.portas].slice(0, 4),
-            alvos: [...inf.alvos].filter(Boolean),
-            investigados: [...inf.investigados].filter(Boolean),
-            alvosCard: [...dados.alvos].filter(Boolean),
-            investigadosCard: [...dados.investigados].filter(Boolean),
-            provider: (cached && cached.provider) ? cached.provider : null,
-            providerError: (cached && cached.error) ? true : false,
-            asn: (cached && cached.asn) ? cached.asn : null,
-            isCommon: isCommonIPInfo(common),
-            commonLabel: commonIPLabel(inf.ip, commonMap)
-          });
-        });
-      });
-
-      const totalInterlocutores = Object.keys(byNum).length;
-      const totalIPs = cards.length;
-      const totalComuns = cards.filter(c => c.isCommon).length;
-      const totalComProvedor = cards.filter(c => c.provider).length;
-      const geradoEm = new Date().toLocaleString('pt-BR');
-
-      const cardsJson = JSON.stringify(cards);
-
-      // ── CSS da galeria ──
-      const css = `
-@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;600;700&display=swap');
-:root{
-  --bg:#050a0e;--bg2:#0a1520;--bg3:#0d1e2e;
-  --accent:#00e5ff;--green:#39ff14;--red:#ff3d71;--gold:#ffbe00;
-  --text:#c8d8e8;--dim:#4a6070;
-  --border:rgba(0,229,255,0.15);--glow:0 0 20px rgba(0,229,255,0.3);
-}
-*{margin:0;padding:0;box-sizing:border-box;}
-body{background:var(--bg);color:var(--text);font-family:'Rajdhani',sans-serif;min-height:100vh;}
-body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.05) 2px,rgba(0,0,0,0.05) 4px);pointer-events:none;z-index:999;}
-::-webkit-scrollbar{width:3px;}
-::-webkit-scrollbar-track{background:var(--bg);}
-::-webkit-scrollbar-thumb{background:rgba(0,229,255,0.15);}
-
-header{position:sticky;top:0;z-index:100;padding:14px 32px;border-bottom:1px solid var(--border);background:rgba(5,10,14,0.97);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;}
-.logo-name{font-family:'Orbitron',monospace;font-size:14px;font-weight:900;letter-spacing:4px;color:var(--accent);text-shadow:0 0 20px rgba(0,229,255,0.5);}
-.logo-sub{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);letter-spacing:2px;margin-top:2px;}
-.hstats{display:flex;gap:10px;flex-wrap:wrap;}
-.hstat{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--dim);padding:5px 10px;border:1px solid var(--border);background:rgba(0,229,255,0.02);letter-spacing:1px;}
-.hstat b{color:var(--accent);font-size:12px;}
-.meta-line{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--dim);letter-spacing:1px;text-align:right;}
-
-.toolbar{padding:16px 24px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--border);background:rgba(5,10,14,0.6);}
-.tb{font-family:'Orbitron',monospace;font-size:8px;letter-spacing:1px;padding:7px 12px;border:1px solid var(--border);background:transparent;color:var(--dim);cursor:pointer;transition:all 0.2s;}
-.tb:hover,.tb.active{border-color:var(--accent);color:var(--accent);background:rgba(0,229,255,0.04);}
-.tb.common{border-color:rgba(255,190,0,0.4);color:var(--gold);}
-.tb.common.active{background:rgba(255,190,0,0.07);}
-.search{font-family:'Share Tech Mono',monospace;font-size:11px;padding:7px 12px;background:var(--bg2);border:1px solid var(--border);color:var(--text);outline:none;flex:1;min-width:180px;transition:border-color 0.2s;}
-.search:focus{border-color:var(--accent);}
-.search::placeholder{color:var(--dim);}
-.count-lbl{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--dim);letter-spacing:1px;white-space:nowrap;}
-.count-lbl b{color:var(--accent);}
-
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;padding:24px;}
-.card{background:var(--bg2);border:1px solid var(--border);transition:all 0.25s;animation:fu 0.35s ease forwards;opacity:0;position:relative;}
-.card.common{border-color:rgba(255,190,0,0.45);box-shadow:0 0 18px rgba(255,190,0,0.1);}
-.card:hover{border-color:var(--accent);box-shadow:var(--glow);transform:translateY(-2px);}
-.card.common:hover{border-color:var(--gold);}
-@keyframes fu{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-
-.card-head{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:8px;}
-.card-ip{font-family:'Share Tech Mono',monospace;font-size:13px;color:var(--accent);letter-spacing:1px;word-break:break-all;}
-.card-ip.ipv6{font-size:10px;color:rgba(0,229,255,0.7);}
-.badge-row{display:flex;gap:4px;flex-wrap:wrap;margin-top:5px;}
-.badge{font-family:'Share Tech Mono',monospace;font-size:7px;letter-spacing:1px;padding:2px 5px;border:1px solid;}
-.b-alvo{color:var(--green);border-color:rgba(57,255,20,0.4);background:rgba(57,255,20,0.05);}
-.b-inter{color:#ffcc00;border-color:rgba(255,204,0,0.4);background:rgba(255,204,0,0.05);}
-.b-common{color:var(--gold);border-color:rgba(255,190,0,0.5);background:rgba(255,190,0,0.07);}
-.b-ipv6{color:rgba(0,229,255,0.6);border-color:rgba(0,229,255,0.2);}
-.common-corner{position:absolute;top:0;right:0;border-style:solid;border-width:0 22px 22px 0;border-color:transparent var(--gold) transparent transparent;}
-
-.card-body{padding:12px 14px;}
-.row{display:flex;flex-direction:column;margin-bottom:9px;}
-.row-key{font-family:'Share Tech Mono',monospace;font-size:7px;color:var(--dim);letter-spacing:2px;margin-bottom:2px;}
-.row-val{font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--text);word-break:break-all;line-height:1.5;}
-.row-val.hi{color:var(--green);}
-.row-val.acc{color:var(--accent);}
-.row-val.gold{color:var(--gold);}
-.row-val.warn{color:#ffcc00;}
-.row-val.err{color:var(--red);opacity:0.7;}
-.divider{border:none;border-top:1px solid var(--border);margin:8px 0;}
-
-.card-num{padding:10px 14px;border-top:1px solid var(--border);font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--dim);letter-spacing:1px;}
-.card-num b{color:rgba(0,229,255,0.5);}
-
-.empty{grid-column:1/-1;text-align:center;padding:80px 20px;font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:2px;line-height:2.5;}
-.empty-big{font-family:'Orbitron',monospace;font-size:11px;letter-spacing:4px;color:rgba(0,229,255,0.1);margin-bottom:12px;}
-`;
-
-      // Serializa a função de render (definida fora) injetando os dados como variável global
-      const galleryScript = 'const DATA=' + cardsJson + ';\n'
-        + '(' + _ipGalleryRender.toString() + ')();';
-
-      const galleryHtml = '<!DOCTYPE html>\n'
-        + '<html lang="pt-BR">\n'
-        + '<head>\n'
-        + '<meta charset="UTF-8">\n'
-        + '<meta name="viewport" content="width=device-width,initial-scale=1.0">\n'
-        + '<title>INTEL · IPs do Extrato</title>\n'
-        + '<style>' + css + '</style>\n'
-        + '</head>\n'
-        + '<body>\n'
-        + '<header>\n'
-        + '  <div><div class="logo-name">INTEL</div><div class="logo-sub">ANÁLISE DE IPs · EXTRATO WHATSAPP</div></div>\n'
-        + '  <div class="hstats">'
-        + '<div class="hstat">INTERLOCUTORES <b>' + totalInterlocutores + '</b></div>'
-        + '<div class="hstat">IPs ÚNICOS <b>' + totalIPs + '</b></div>'
-        + '<div class="hstat">IPs COMUNS <b>' + totalComuns + '</b></div>'
-        + '<div class="hstat">COM PROVEDOR <b>' + totalComProvedor + '</b></div>'
-        + '  </div>\n'
-        + '  <div class="meta-line">GERADO EM<br>' + geradoEm + '</div>\n'
-        + '</header>\n'
-        + '<div class="toolbar">\n'
-        + '  <input class="search" id="srch" placeholder="BUSCAR IP, PROVEDOR, ALVO, DEVICE...">\n'
-        + '  <button class="tb active" onclick="setF(\'all\',this)">TODOS</button>\n'
-        + '  <button class="tb" onclick="setF(\'alvo\',this)">● ALVO</button>\n'
-        + '  <button class="tb" onclick="setF(\'inter\',this)">● INTERLOCUT.</button>\n'
-        + '  <button class="tb common" onclick="setF(\'common\',this)">⛓ IP COMUM</button>\n'
-        + '  <button class="tb" onclick="setF(\'prov\',this)">✓ COM PROVEDOR</button>\n'
-        + '  <span class="count-lbl" id="cl"></span>\n'
-        + '</div>\n'
-        + '<div class="grid" id="grid"></div>\n'
-        + '<scr' + 'ipt>\n' + galleryScript + '\n</scr' + 'ipt>\n'
-        + '</body></html>';
-
-      zip.file('ips_extrato.html', galleryHtml);
-
-      btn.textContent = 'COMPRIMINDO...';
-      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `intel_ips_${Date.now()}.zip`;
-      a.click();
-
-    } catch(e) {
-      alert('Erro ao gerar ZIP de IPs: ' + e.message);
-      console.error(e);
-    }
-
-    btn.disabled = false;
-    btn.textContent = originalText;
   }
 
   async function consultarIPExtrato(ip) {
