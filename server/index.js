@@ -552,6 +552,45 @@ function respostaProvedorExterno(ip, fonte, tentativas, motivo = 'IP não retorn
   };
 }
 
+
+function extrairSomenteProvedorRegistroBR(data) {
+  const candidatos = [];
+
+  const visitar = (entity, depth = 0) => {
+    if (!entity) return;
+
+    const roles = Array.isArray(entity.roles)
+      ? entity.roles.map(r => String(r).toLowerCase())
+      : [];
+
+    const fn = vcardValue(entity, 'fn');
+    const org = vcardValue(entity, 'org');
+    const kind = String(vcardValue(entity, 'kind') || '').toLowerCase();
+    const nome = String(fn || org || '').trim();
+
+    if (nome) {
+      let score = 0;
+      if (roles.includes('registrant')) score += 100;
+      if (kind === 'org') score += 30;
+      if ((entity.publicIds || []).some(pid => String(pid.type || '').toLowerCase() === 'cnpj')) score += 20;
+      if (roles.includes('administrative')) score += 10;
+      if (roles.includes('technical')) score -= 10;
+      if (roles.includes('abuse')) score -= 30;
+      if (kind === 'individual') score -= 20;
+      score -= depth;
+
+      candidatos.push({ score, nome });
+    }
+
+    (entity.entities || []).forEach(child => visitar(child, depth + 1));
+  };
+
+  (data.entities || []).forEach(entity => visitar(entity, 0));
+  candidatos.sort((a, b) => b.score - a.score);
+
+  return candidatos[0]?.nome || null;
+}
+
 function extrairRdap(data, ip, fonte) {
   const asn = data.nicbr_autnum
     ? `AS${data.nicbr_autnum}`
@@ -668,56 +707,87 @@ function temIdentificacaoUtil(result) {
   return !!(result?.titular || result?.documento || result?.asn || result?.handle);
 }
 
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function ehNaoEncontradoRegistro(r) {
+  const status = Number(r?.status);
+  const statusStr = String(r?.status || '').toLowerCase();
+  const data = r?.data || {};
+  const errorCode = Number(data.errorCode);
+  const title = String(data.title || data.description || '').toLowerCase();
+
+  return status === 404 || errorCode === 404 || statusStr === '404' || title.includes('not found') || title.includes('não encontrado') || title.includes('nao encontrado');
+}
+
+function ehFalhaTemporariaRegistro(r) {
+  const status = Number(r?.status);
+  if ([408, 425, 429, 500, 502, 503, 504].includes(status)) return true;
+  if (status >= 500) return true;
+  const statusStr = String(r?.status || '').toLowerCase();
+  return statusStr.includes('timeout') || statusStr.includes('json') || statusStr.includes('abort') || statusStr.includes('network');
+}
+
 app.get('/api/ip/:ip', async (req, res) => {
   const ip = normalizarIP(req.params.ip);
   if (!ip) return res.status(400).json({ ok: false, error: 'IP inválido ou obrigatório' });
 
-  // Cache em memória: guarda respostas positivas, inclusive a marcação de provedor externo.
+  // Cache em memória: agora guarda somente o nome do provedor.
   if (ipCache[ip]?.ok) return res.json(ipCache[ip]);
 
-  const tentativas = [];
-  const urlRegistro = rdapEndpoints(ip)[0];
+  const urlRegistro = `https://rdap.registro.br/ip/${rdapPathIP(ip)}`;
+  const atrasos = [0, 1500, 3500];
 
-  try {
-    const r = await fetchJsonWithTimeout(urlRegistro);
+  for (let tentativa = 0; tentativa < atrasos.length; tentativa++) {
+    if (atrasos[tentativa] > 0) await sleep(atrasos[tentativa]);
 
-    if (!r.ok) {
-      const motivo = `Registro.br não retornou cadastro brasileiro para este IP. Status: ${r.status}`;
-      tentativas.push(`${urlRegistro} => HTTP/ERRO ${r.status}`);
-      const resposta = respostaProvedorExterno(ip, urlRegistro, tentativas, motivo);
+    try {
+      const r = await fetchJsonWithTimeout(urlRegistro, 15000);
+
+      if (!r.ok) {
+        // Só classifica como externo quando o Registro.br declarou "não encontrado".
+        // Rate limit, timeout e 5xx continuam sendo falha temporária.
+        if (ehNaoEncontradoRegistro(r)) {
+          const resposta = { ok: true, provedor: 'Provedor externo: consulte lacnic.net' };
+          ipCache[ip] = resposta;
+          return res.json(resposta);
+        }
+
+        if (ehFalhaTemporariaRegistro(r) && tentativa < atrasos.length - 1) {
+          continue;
+        }
+
+        return res.json({
+          ok: false,
+          error: `Falha temporária ao consultar Registro.br. Status: ${r.status}`
+        });
+      }
+
+      const provedor = extrairSomenteProvedorRegistroBR(r.data);
+
+      if (provedor) {
+        const resposta = { ok: true, provedor };
+        ipCache[ip] = resposta;
+        return res.json(resposta);
+      }
+
+      const resposta = { ok: true, provedor: 'Provedor não localizado no Registro.br' };
       ipCache[ip] = resposta;
       return res.json(resposta);
+
+    } catch(e) {
+      const msg = e.name === 'AbortError' ? 'timeout' : e.message;
+
+      if (tentativa < atrasos.length - 1) continue;
+
+      console.error('[INTEL] Erro consulta IP Registro.br:', ip, msg);
+      return res.json({
+        ok: false,
+        error: `Falha temporária ao consultar Registro.br: ${msg}`
+      });
     }
-
-    const result = extrairRdap(r.data, ip, r.url);
-    tentativas.push(`${urlRegistro} => OK${result.titular ? ' titular=' + result.titular : ''}`);
-
-    if (temIdentificacaoUtil(result)) {
-      const resposta = { ok: true, result, tentativas };
-      ipCache[ip] = resposta;
-      return res.json(resposta);
-    }
-
-    const resposta = respostaProvedorExterno(
-      ip,
-      urlRegistro,
-      tentativas,
-      'Registro.br respondeu, mas não retornou titular/ASN/bloco útil para identificação.'
-    );
-    ipCache[ip] = resposta;
-    return res.json(resposta);
-
-  } catch(e) {
-    const msg = e.name === 'AbortError' ? 'timeout' : e.message;
-    tentativas.push(`${urlRegistro} => ${msg}`);
-
-    // Em falha real de conexão, não marque como externo, porque pode ser indisponibilidade temporária.
-    console.error('[INTEL] Erro consulta IP Registro.br:', ip, msg);
-    return res.json({
-      ok: false,
-      error: `Falha temporária ao consultar Registro.br: ${msg}`,
-      tentativas
-    });
   }
 });
 
