@@ -1228,6 +1228,18 @@
       const res = await fetch(`/api/ip?id=${encodeURIComponent(ip)}`);
       const data = await res.json();
 
+      // Aproveita o resultado da consulta manual para atualizar o cache do extrato.
+      // Isso resolve o caso em que fetchProviderForIP falhou temporariamente mas
+      // a consulta manual obteve resultado — o card do extrato passa a mostrar o provedor.
+      if (data.ok) {
+        const info = extractProviderInfo(data);
+        if (info.provider || info.asn) {
+          _saveProviderSuccess(ip, info);
+          const elProv = document.getElementById(ipProviderDomId(ip));
+          if (elProv) updateProviderLine(ip);
+        }
+      }
+
       if (!data.ok) {
         const cached = getProviderCache(ip);
         if (cached && cached.provider) {
@@ -1317,7 +1329,7 @@
   // A consulta de provedor é feita em fila, com baixa concorrência, para não travar o painel.
   const IP_PROVIDER_CACHE_KEY = 'intel_ip_provider_cache_v4';
   const IP_PROVIDER_OLD_CACHE_KEYS = ['intel_ip_provider_cache_v1', 'intel_ip_provider_cache_v2', 'intel_ip_provider_cache_v3'];
-  const IP_PROVIDER_CONCURRENCY = 1;
+  const IP_PROVIDER_CONCURRENCY = 2;
   let ipProviderCache = {};
   let ipProviderQueue = [];
   let ipProviderQueued = new Set();
@@ -1490,9 +1502,13 @@
 
   async function fetchProviderForIP(ip) {
     updateProviderLine(ip, 'PROVEDOR: consultando...', 'loading');
+
+    // Timeout de 35s no browser — evita espera indefinida se o servidor demorar muito.
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 35000);
+
     try {
-      // Rota por query string evita qualquer ambiguidade com IPv6 em parâmetro de caminho.
-      const res = await fetch(`/api/ip?id=${encodeURIComponent(ip)}`);
+      const res  = await fetch(`/api/ip?id=${encodeURIComponent(ip)}`, { signal: ctrl.signal });
       const data = await res.json();
 
       if (!data.ok) throw new Error(formatRdapAttempts(data));
@@ -1500,12 +1516,7 @@
       const info = extractProviderInfo(data);
       if (!info.provider && !info.asn) throw new Error('Retorno sem titular/ASN');
 
-      ipProviderCache[ip] = {
-        provider: info.provider || info.asn,
-        asn: info.provider ? info.asn : '',
-        ts: Date.now()
-      };
-      saveIPProviderCache();
+      _saveProviderSuccess(ip, info);
 
       const el = document.getElementById(ipProviderDomId(ip));
       if (el) {
@@ -1514,14 +1525,14 @@
         renderExtrato();
       }
     } catch(e) {
-      // Não classifica como “não localizado”. Guarda cooldown para não bombardear o RDAP nem entrar em loop.
       const msg = String(e.message || 'falha temporária').slice(0, 220);
+      // Cooldown de 2 minutos — curto o suficiente para recuperar de falhas transitórias.
       ipProviderCache[ip] = {
         error: true,
         temporary: true,
         message: msg,
         ts: Date.now(),
-        retryAt: Date.now() + (15 * 60 * 1000)
+        retryAt: Date.now() + (2 * 60 * 1000)
       };
       saveIPProviderCache();
 
@@ -1531,7 +1542,21 @@
       } else if (document.getElementById('extratoPanel').style.display !== 'none') {
         renderExtrato();
       }
+    } finally {
+      clearTimeout(timer);
     }
+  }
+
+  // Salva resultado positivo no cache do extrato.
+  // Chamada tanto pelo fetchProviderForIP quanto pelo consultarIP (consulta manual),
+  // garantindo que o card do extrato atualize independente de onde veio o resultado.
+  function _saveProviderSuccess(ip, info) {
+    ipProviderCache[ip] = {
+      provider: info.provider || info.asn,
+      asn: info.provider ? info.asn : '',
+      ts: Date.now()
+    };
+    saveIPProviderCache();
   }
 
   loadIPProviderCache();
